@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Captura de diapositivas</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0b0d10; color: #e8eaed; font: 16px/1.4 -apple-system, system-ui, sans-serif;
+         padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  main { max-width: 900px; margin: 0 auto; padding: 12px; }
+  h1 { font-size: 18px; margin: 4px 0 10px; }
+  #visor { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16/9; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
+  #contador { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.65); padding: 4px 10px; border-radius: 8px;
+              font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #estado { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,.65); padding: 4px 10px; border-radius: 8px; font-size: 13px; }
+  #ultima { position: absolute; bottom: 8px; right: 8px; width: 28%; border: 2px solid #fff; border-radius: 6px; display: none; }
+  .fila { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  button { flex: 1 1 140px; min-height: 48px; border: 0; border-radius: 10px; font-size: 16px; font-weight: 600;
+           background: #2a2f37; color: #e8eaed; }
+  button.primario { background: #2f6fed; color: #fff; }
+  button.peligro { background: #5a1f24; color: #ffe1e3; }
+  button:disabled { opacity: .4; }
+  label { display: block; margin-top: 12px; font-size: 14px; color: #aab0b8; }
+  input[type=range] { width: 100%; }
+  #info { margin-top: 10px; font-size: 13px; color: #aab0b8; white-space: pre-line; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Captura de diapositivas</h1>
+  <div id="visor">
+    <video id="video" playsinline muted autoplay></video>
+    <div id="flash"></div>
+    <div id="contador">0</div>
+    <div id="estado">detenido</div>
+  </div>
+
+  <div class="fila">
+    <button id="btnIniciar" class="primario">Iniciar</button>
+    <button id="btnManual" disabled>Capturar ahora</button>
+  </div>
+  <div class="fila">
+    <button id="btnExportar">Exportar ZIP</button>
+    <button id="btnBorrar" class="peligro">Borrar fotos</button>
+  </div>
+
+  <label>Sensibilidad: cambia con <span id="sensTxt">6</span>% de la imagen
+    <input id="sens" type="range" min="1" max="20" value="6">
+  </label>
+  <div id="info"></div>
+</main>
+
+<script>
+// ---------- parámetros ----------
+const AW = 96, AH = 54;          // tamaño del cuadro de análisis
+const TICK_MS = 150;             // cada cuánto se analiza
+const UMBRAL_PIXEL = 28;         // diferencia de gris (0-255) para contar un píxel como "cambiado"
+const QUIETO = 0.01;             // fracción máx. de píxeles cambiados entre cuadros seguidos para considerar la imagen quieta
+const CUADROS_QUIETOS = 2;       // cuadros quietos seguidos antes de disparar (~0,3 s)
+const ESPERA_MAX_MS = 3000;      // si hay cambio pero nunca se queda quieta, dispara igual
+const RED_MS = 25000;            // red de seguridad: revisa cambios sutiles cada 25 s
+const CALIDAD_JPEG = 0.9;
+
+const $ = id => document.getElementById(id);
+const video = $('video');
+const lienzoA = document.createElement('canvas'); lienzoA.width = AW; lienzoA.height = AH;
+const ctxA = lienzoA.getContext('2d', { willReadFrequently: true });
+const lienzoF = document.createElement('canvas');
+// miniatura de la última captura: se crea aquí porque no tiene imagen hasta la primera foto
+$('visor').appendChild(Object.assign(document.createElement('img'), { id: 'ultima', alt: 'última captura' }));
+
+let activo = false, ocupado = false, timer = null, wakeLock = null;
+let ref = null, prev = null, quietos = 0, cambioDesde = 0, ultimaCaptura = 0, total = 0;
+
+// ---------- almacenamiento (IndexedDB) ----------
+const dbp = new Promise((ok, err) => {
+  const r = indexedDB.open('capturas', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('fotos', { autoIncrement: true });
+  r.onsuccess = () => ok(r.result);
+  r.onerror = () => err(r.error);
+});
+async function tx(modo, fn) {
+  const db = await dbp;
+  return new Promise((ok, err) => {
+    const t = db.transaction('fotos', modo);
+    const r = fn(t.objectStore('fotos'));
+    t.oncomplete = () => ok(r && r.result);
+    t.onerror = t.onabort = () => err(t.error);
+  });
+}
+const guardar = reg => tx('readwrite', s => s.add(reg));
+const contar = () => tx('readonly', s => s.count());
+const claves = () => tx('readonly', s => s.getAllKeys());
+const leer = k => tx('readonly', s => s.get(k));
+const vaciar = () => tx('readwrite', s => s.clear());
+
+// ---------- análisis ----------
+function cuadroGris() {
+  ctxA.drawImage(video, 0, 0, AW, AH);
+  const d = ctxA.getImageData(0, 0, AW, AH).data;
+  const g = new Float32Array(AW * AH);
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  return g;
+}
+function fraccionCambiada(a, b) {
+  let n = 0;
+  for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > UMBRAL_PIXEL) n++;
+  return n / a.length;
+}
+
+function tick() {
+  if (!activo || ocupado || video.readyState < 2) return;
+  const cur = cuadroGris();
+  const ahora = Date.now();
+  if (!ref) { prev = cur; capturar('auto', cur); return; }
+
+  const movimiento = fraccionCambiada(cur, prev);
+  const cambio = fraccionCambiada(cur, ref);
+  prev = cur;
+  quietos = movimiento < QUIETO ? quietos + 1 : 0;
+
+  const sens = $('sens').value / 100;
+  if (cambio > sens) {
+    if (!cambioDesde) cambioDesde = ahora;
+    if (quietos >= CUADROS_QUIETOS || ahora - cambioDesde > ESPERA_MAX_MS) capturar('auto', cur);
+    else estado('cambio…');
+  } else {
+    cambioDesde = 0;
+    if (ahora - ultimaCaptura > RED_MS) {
+      if (cambio > sens / 8 && quietos >= CUADROS_QUIETOS) capturar('red', cur);
+      else if (cambio <= sens / 8) ultimaCaptura = ahora;   // nada cambió: reinicia el reloj de la red
+    }
+    estado('vigilando');
+  }
+}
+
+// ---------- captura ----------
+async function capturar(tipo, gris) {
+  if (ocupado) return;
+  ocupado = true;
+  try {
+    lienzoF.width = video.videoWidth; lienzoF.height = video.videoHeight;
+    lienzoF.getContext('2d').drawImage(video, 0, 0);
+    const blob = await new Promise(ok => lienzoF.toBlob(ok, 'image/jpeg', CALIDAD_JPEG));
+    if (!blob) throw new Error('no se pudo generar la imagen');
+    await guardar({ t: Date.now(), tipo, blob });
+    ref = gris || cuadroGris();
+    cambioDesde = 0; ultimaCaptura = Date.now();
+    total++; $('contador').textContent = total;
+    const img = $('ultima');
+    if (img.src) URL.revokeObjectURL(img.src);
+    img.src = URL.createObjectURL(blob); img.style.display = 'block';
+    const f = $('flash'); f.style.transition = 'none'; f.style.opacity = .7;
+    requestAnimationFrame(() => { f.style.transition = 'opacity .25s'; f.style.opacity = 0; });
+  } catch (e) {
+    info('Error al capturar: ' + e.message);
+  } finally {
+    ocupado = false;
+  }
+}
+
+// ---------- cámara ----------
+async function pedirWakeLock() {
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (activo && document.visibilityState === 'visible') pedirWakeLock();
+});
+
+async function iniciar() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } }
+    });
+    video.srcObject = stream;
+    await video.play();
+    await pedirWakeLock();
+    activo = true; ref = prev = null; quietos = 0; cambioDesde = 0;
+    timer = setInterval(tick, TICK_MS);
+    $('btnIniciar').textContent = 'Detener';
+    $('btnManual').disabled = false;
+    const s = stream.getVideoTracks()[0].getSettings();
+    info(`Cámara: ${s.width}×${s.height}. Deja esta página abierta y la pantalla encendida.`);
+  } catch (e) {
+    info('No se pudo abrir la cámara: ' + e.message + '\nLa página debe abrirse por https y con permiso de cámara.');
+  }
+}
+function detener() {
+  activo = false; clearInterval(timer);
+  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+  video.srcObject = null;
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  $('btnIniciar').textContent = 'Iniciar';
+  $('btnManual').disabled = true;
+  estado('detenido');
+}
+
+// ---------- exportar a ZIP (sin compresión, sin cargar todo en memoria) ----------
+const TABLA_CRC = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = TABLA_CRC[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+const p2 = n => String(n).padStart(2, '0');
+function fechaDos(d) {
+  return { hora: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1),
+           fecha: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate() };
+}
+
+async function exportar() {
+  const ks = await claves();
+  if (!ks.length) { info('No hay fotos guardadas.'); return; }
+  $('btnExportar').disabled = true;
+  try {
+    const partes = [], central = [];
+    let offset = 0, t0 = null;
+    for (let i = 0; i < ks.length; i++) {
+      info(`Preparando ZIP… ${i + 1}/${ks.length}`);
+      const reg = await leer(ks[i]);
+      const d = new Date(reg.t); if (!t0) t0 = d;
+      const nombre = new TextEncoder().encode(
+        `${String(i + 1).padStart(3, '0')}_${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}_${reg.tipo}.jpg`);
+      const crc = crc32(new Uint8Array(await reg.blob.arrayBuffer()));
+      const tam = reg.blob.size, { hora, fecha } = fechaDos(d);
+
+      const local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true);
+      local.setUint16(10, hora, true); local.setUint16(12, fecha, true);
+      local.setUint32(14, crc, true); local.setUint32(18, tam, true); local.setUint32(22, tam, true);
+      local.setUint16(26, nombre.length, true);
+      partes.push(local, nombre, reg.blob);
+
+      const cd = new DataView(new ArrayBuffer(46));
+      cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true);
+      cd.setUint16(12, hora, true); cd.setUint16(14, fecha, true);
+      cd.setUint32(16, crc, true); cd.setUint32(20, tam, true); cd.setUint32(24, tam, true);
+      cd.setUint16(28, nombre.length, true); cd.setUint32(42, offset, true);
+      central.push(cd, nombre);
+      offset += 30 + nombre.length + tam;
+    }
+    const tamCentral = central.reduce((s, p) => s + p.byteLength, 0);
+    const fin = new DataView(new ArrayBuffer(22));
+    fin.setUint32(0, 0x06054b50, true);
+    fin.setUint16(8, ks.length, true); fin.setUint16(10, ks.length, true);
+    fin.setUint32(12, tamCentral, true); fin.setUint32(16, offset, true);
+
+    const nombreZip = `clase_${t0.getFullYear()}-${p2(t0.getMonth() + 1)}-${p2(t0.getDate())}_${p2(t0.getHours())}${p2(t0.getMinutes())}.zip`;
+    const zip = new File([...partes, ...central, fin], nombreZip, { type: 'application/zip' });
+    info(`ZIP listo: ${ks.length} fotos, ${(zip.size / 1048576).toFixed(0)} MB.`);
+
+    let compartido = false;
+    if (navigator.canShare && navigator.canShare({ files: [zip] })) {
+      try { await navigator.share({ files: [zip] }); compartido = true; }
+      catch (e) { if (e.name === 'AbortError') compartido = true; }
+    }
+    if (!compartido) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(zip); a.download = nombreZip;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    }
+  } catch (e) {
+    info('Error al exportar: ' + e.message);
+  } finally {
+    $('btnExportar').disabled = false;
+  }
+}
+
+// ---------- interfaz ----------
+function estado(t) { $('estado').textContent = t; }
+function info(t) { $('info').textContent = t; }
+
+$('btnIniciar').onclick = () => activo ? detener() : iniciar();
+$('btnManual').onclick = () => capturar('manual');
+$('btnExportar').onclick = exportar;
+$('btnBorrar').onclick = async () => {
+  if (!confirm('¿Borrar todas las fotos guardadas en este celular? Exporta primero si no lo has hecho.')) return;
+  await vaciar(); total = 0; $('contador').textContent = 0; $('ultima').style.display = 'none';
+  info('Fotos borradas.');
+};
+$('sens').oninput = e => $('sensTxt').textContent = e.target.value;
+
+contar().then(n => {
+  total = n; $('contador').textContent = n;
+  if (n) info(`Hay ${n} fotos guardadas de una sesión anterior. Expórtalas o bórralas antes de empezar otra clase.`);
+}).catch(e => info('No se pudo abrir el almacenamiento: ' + e.message));
+</script>
+</body>
+</html>

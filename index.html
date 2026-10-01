@@ -24,8 +24,9 @@
   #contador { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.65); padding: 4px 10px; border-radius: 8px;
               font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   #estado { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,.65); padding: 4px 10px; border-radius: 8px; font-size: 13px; }
-  #ultima { position: absolute; bottom: 8px; right: 8px; width: 30%; border: 2px solid #fff; border-radius: 6px; display: none; }
-  #ultima.grande { width: calc(100% - 16px); }
+  #ultima { display: none; height: 64px; max-width: 45%; object-fit: contain; margin: 8px auto 0; border: 1px solid #fff; border-radius: 6px; }
+  #ultima.grande { position: fixed; inset: 0; z-index: 10; width: 100%; height: 100%; max-width: none; margin: 0;
+                   border: 0; border-radius: 0; background: rgba(0,0,0,.92); }
   .fila { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   button { flex: 1 1 140px; min-height: 48px; border: 0; border-radius: 10px; font-size: 16px; font-weight: 600;
            background: #2a2f37; color: #e8eaed; }
@@ -111,9 +112,10 @@ const video = $('video'), visor = $('visor'), marco = $('marco');
 const lienzoA = document.createElement('canvas'); lienzoA.width = AW; lienzoA.height = AH;
 const ctxA = lienzoA.getContext('2d', { willReadFrequently: true });
 const lienzoF = document.createElement('canvas');
-// miniatura de la última captura: se crea aquí porque no tiene imagen hasta la primera foto
+// miniatura de la última captura: se crea aquí porque no tiene imagen hasta la primera foto.
+// Va debajo del visor para no tapar la cámara; al tocarla se ve a pantalla completa.
 const ultima = Object.assign(document.createElement('img'), { id: 'ultima', alt: 'última captura' });
-visor.appendChild(ultima);
+visor.after(ultima);
 
 let activo = false, ocupado = false, timer = null, wakeLock = null, pista = null, marcando = false;
 let ref = null, prev = null, quietoDesde = 0, cambioDesde = 0, ultimaCaptura = 0, ultimaRevision = 0, total = 0;

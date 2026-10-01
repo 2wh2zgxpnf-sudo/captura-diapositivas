@@ -119,7 +119,7 @@ def enderezar(img, quad):
     h, w = img.shape[:2]
     if quad is None:
         return img
-    q = (quad * [w, h]).astype(np.float32)
+    q = ordenar_esquinas(quad * [w, h])
     ancho = max(np.linalg.norm(q[1] - q[0]), np.linalg.norm(q[2] - q[3]))
     altura = max(np.linalg.norm(q[3] - q[0]), np.linalg.norm(q[2] - q[1]))
     for prop in (16 / 9, 4 / 3):   # ajustar a la proporción estándar más cercana

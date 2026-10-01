@@ -12,22 +12,34 @@
          padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
   main { max-width: 900px; margin: 0 auto; padding: 12px; }
   h1 { font-size: 18px; margin: 4px 0 10px; }
-  #visor { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16/9; }
-  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #visor { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16/9;
+           width: 100%; margin: 0 auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+  video { width: 100%; height: 100%; object-fit: fill; display: block; }
   #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
+  #marco { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+  #marco polygon { fill: rgba(255,212,59,.12); stroke: #ffd43b; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  .esquina { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; display: none;
+             border: 3px solid #ffd43b; background: rgba(255,212,59,.25); touch-action: none; }
+  #visor.marcando .esquina { display: block; }
   #contador { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.65); padding: 4px 10px; border-radius: 8px;
               font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   #estado { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,.65); padding: 4px 10px; border-radius: 8px; font-size: 13px; }
-  #ultima { position: absolute; bottom: 8px; right: 8px; width: 28%; border: 2px solid #fff; border-radius: 6px; display: none; }
+  #ultima { position: absolute; bottom: 8px; right: 8px; width: 30%; border: 2px solid #fff; border-radius: 6px; display: none; }
+  #ultima.grande { width: calc(100% - 16px); }
   .fila { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   button { flex: 1 1 140px; min-height: 48px; border: 0; border-radius: 10px; font-size: 16px; font-weight: 600;
            background: #2a2f37; color: #e8eaed; }
   button.primario { background: #2f6fed; color: #fff; }
   button.peligro { background: #5a1f24; color: #ffe1e3; }
   button:disabled { opacity: .4; }
-  label { display: block; margin-top: 12px; font-size: 14px; color: #aab0b8; }
-  input[type=range] { width: 100%; }
-  #info { margin-top: 10px; font-size: 13px; color: #aab0b8; white-space: pre-line; }
+  details { margin-top: 12px; background: #14171c; border-radius: 10px; padding: 10px 12px; }
+  summary { font-weight: 600; }
+  label { display: block; margin-top: 12px; font-size: 14px; color: #c3c8cf; }
+  label.casilla { display: flex; gap: 8px; align-items: center; }
+  input[type=range], select { width: 100%; }
+  select { min-height: 40px; font-size: 16px; background: #2a2f37; color: #e8eaed; border: 0; border-radius: 8px; padding: 0 8px; }
+  input[type=checkbox] { width: 22px; height: 22px; }
+  #info { margin-top: 10px; font-size: 13px; color: #c3c8cf; white-space: pre-line; }
 </style>
 </head>
 <body>
@@ -35,6 +47,7 @@
   <h1>Captura de diapositivas</h1>
   <div id="visor">
     <video id="video" playsinline muted autoplay></video>
+    <svg id="marco" viewBox="0 0 100 100" preserveAspectRatio="none"><polygon></polygon></svg>
     <div id="flash"></div>
     <div id="contador">0</div>
     <div id="estado">detenido</div>
@@ -42,6 +55,7 @@
 
   <div class="fila">
     <button id="btnIniciar" class="primario">Iniciar</button>
+    <button id="btnMarco" disabled>Marcar pantalla</button>
     <button id="btnManual" disabled>Capturar ahora</button>
   </div>
   <div class="fila">
@@ -49,33 +63,60 @@
     <button id="btnBorrar" class="peligro">Borrar fotos</button>
   </div>
 
-  <label>Sensibilidad: cambia con <span id="sensTxt">6</span>% de la imagen
-    <input id="sens" type="range" min="1" max="20" value="6">
+  <label id="filaZoom" hidden>Zoom de la cámara: <span id="zoomTxt"></span>×
+    <input id="zoom" type="range">
   </label>
-  <div id="info"></div>
+
+  <details>
+    <summary>Configuración</summary>
+    <label>Cámara
+      <select id="camara"></select>
+    </label>
+    <label>Sensibilidad: dispara cuando cambia el <span id="sensTxt"></span>% de la zona (más alto = menos fotos)
+      <input id="sens" type="range" min="3" max="60">
+    </label>
+    <label>Tiempo quieta antes de disparar: <span id="quietoTxt"></span> s
+      <input id="quieto" type="range" min="0.3" max="3" step="0.1">
+    </label>
+    <label>Pausa mínima entre fotos automáticas: <span id="pausaTxt"></span> s
+      <input id="pausa" type="range" min="0" max="15" step="0.5">
+    </label>
+    <label>Red de seguridad (revisa cambios pequeños) cada <span id="redTxt"></span>
+      <input id="red" type="range" min="0" max="120" step="5">
+    </label>
+    <label class="casilla"><input id="recortar" type="checkbox"> Guardar solo la zona marcada (con un margen)</label>
+    <div class="fila"><button id="btnQuitarMarco">Quitar zona marcada</button></div>
+  </details>
+  <div id="info">Pon el celular fijo (trípode o soporte), toca Iniciar y luego «Marcar pantalla» para llevar las 4 esquinas amarillas a las esquinas del tablero o televisor.</div>
 </main>
 
 <script>
-// ---------- parámetros ----------
-const AW = 96, AH = 54;          // tamaño del cuadro de análisis
+// ---------- parámetros fijos ----------
+const AW = 192, AH = 108;        // tamaño del cuadro de análisis
+const CELDA = 12;                // el cuadro se compara por celdas de 12×12 (16×9 celdas)
 const TICK_MS = 150;             // cada cuánto se analiza
-const UMBRAL_PIXEL = 28;         // diferencia de gris (0-255) para contar un píxel como "cambiado"
-const QUIETO = 0.01;             // fracción máx. de píxeles cambiados entre cuadros seguidos para considerar la imagen quieta
-const CUADROS_QUIETOS = 2;       // cuadros quietos seguidos antes de disparar (~0,3 s)
-const ESPERA_MAX_MS = 3000;      // si hay cambio pero nunca se queda quieta, dispara igual
-const RED_MS = 25000;            // red de seguridad: revisa cambios sutiles cada 25 s
+const UMBRAL_CELDA = 10;         // diferencia media de gris (0-255) para contar una celda como "cambiada"
+const QUIETO = 0.03;             // fracción máx. de celdas cambiadas entre cuadros seguidos para considerar la imagen quieta
+const ESPERA_MAX_MS = 8000;      // si hay cambio pero nunca se queda quieta, dispara igual
+const MARGEN = 0.08;             // margen alrededor del recuadro al recortar
 const CALIDAD_JPEG = 0.9;
 
+// ---------- configuración (se recuerda entre sesiones) ----------
+const cfg = { sens: 15, quieto: 0.6, pausa: 3, red: 30, recortar: true, quad: null, camara: '' };
+try { Object.assign(cfg, JSON.parse(localStorage.getItem('cfg') || '{}')); } catch (e) {}
+function guardarCfg() { try { localStorage.setItem('cfg', JSON.stringify(cfg)); } catch (e) {} }
+
 const $ = id => document.getElementById(id);
-const video = $('video');
+const video = $('video'), visor = $('visor'), marco = $('marco');
 const lienzoA = document.createElement('canvas'); lienzoA.width = AW; lienzoA.height = AH;
 const ctxA = lienzoA.getContext('2d', { willReadFrequently: true });
 const lienzoF = document.createElement('canvas');
 // miniatura de la última captura: se crea aquí porque no tiene imagen hasta la primera foto
-$('visor').appendChild(Object.assign(document.createElement('img'), { id: 'ultima', alt: 'última captura' }));
+const ultima = Object.assign(document.createElement('img'), { id: 'ultima', alt: 'última captura' });
+visor.appendChild(ultima);
 
-let activo = false, ocupado = false, timer = null, wakeLock = null;
-let ref = null, prev = null, quietos = 0, cambioDesde = 0, ultimaCaptura = 0, total = 0;
+let activo = false, ocupado = false, timer = null, wakeLock = null, pista = null, marcando = false;
+let ref = null, prev = null, quietoDesde = 0, cambioDesde = 0, ultimaCaptura = 0, ultimaRevision = 0, total = 0;
 
 // ---------- almacenamiento (IndexedDB) ----------
 const dbp = new Promise((ok, err) => {
@@ -99,62 +140,122 @@ const claves = () => tx('readonly', s => s.getAllKeys());
 const leer = k => tx('readonly', s => s.get(k));
 const vaciar = () => tx('readwrite', s => s.clear());
 
+// ---------- zona de la pantalla ----------
+// cfg.quad: las 4 esquinas de la pantalla (arriba-izq, arriba-der, abajo-der, abajo-izq) en fracciones 0-1 del
+// cuadro de video; el visor tiene la misma proporción que el video. Se vigila y se recorta su rectángulo envolvente.
+function zona(margen) {
+  const W = video.videoWidth, H = video.videoHeight, q = cfg.quad;
+  if (!q) return { x: 0, y: 0, w: W, h: H };
+  const xs = q.map(p => p[0]), ys = q.map(p => p[1]), m = margen || 0;
+  const ax = Math.min(...xs), bx = Math.max(...xs), ay = Math.min(...ys), by = Math.max(...ys);
+  const x0 = Math.max(0, ax - (bx - ax) * m), y0 = Math.max(0, ay - (by - ay) * m);
+  const x1 = Math.min(1, bx + (bx - ax) * m), y1 = Math.min(1, by + (by - ay) * m);
+  return { x: Math.round(x0 * W), y: Math.round(y0 * H), w: Math.max(2, Math.round((x1 - x0) * W)), h: Math.max(2, Math.round((y1 - y0) * H)) };
+}
+const esquinas = [0, 1, 2, 3].map(i => {
+  const e = Object.assign(document.createElement('div'), { className: 'esquina' });
+  visor.appendChild(e);
+  e.addEventListener('pointerdown', ev => e.setPointerCapture(ev.pointerId));
+  e.addEventListener('pointermove', ev => {
+    if (!marcando || !e.hasPointerCapture(ev.pointerId)) return;
+    const b = visor.getBoundingClientRect();
+    cfg.quad[i] = [Math.min(1, Math.max(0, (ev.clientX - b.left) / b.width)), Math.min(1, Math.max(0, (ev.clientY - b.top) / b.height))];
+    pintarMarco();
+  });
+  return e;
+});
+function pintarMarco() {
+  const q = cfg.quad;
+  marco.style.display = q ? 'block' : 'none';
+  if (!q) return;
+  marco.firstElementChild.setAttribute('points', q.map(p => `${p[0] * 100},${p[1] * 100}`).join(' '));
+  q.forEach((p, i) => Object.assign(esquinas[i].style, { left: p[0] * 100 + '%', top: p[1] * 100 + '%' }));
+}
+function ajustarVisor() {
+  if (!video.videoWidth) return;
+  const ar = video.videoWidth / video.videoHeight;
+  visor.style.aspectRatio = ar;
+  visor.style.width = Math.min(visor.parentElement.clientWidth - 24, innerHeight * 0.7 * ar) + 'px';
+}
+video.addEventListener('resize', ajustarVisor);
+addEventListener('resize', ajustarVisor);
+
+function finMarcado() {
+  marcando = false; visor.classList.remove('marcando');
+  $('btnMarco').textContent = 'Marcar pantalla';
+  pintarMarco(); guardarCfg();
+  ref = prev = null;   // la zona cambió: empezar de cero
+  info(cfg.quad ? 'Zona guardada. Solo se vigila esa parte de la imagen.' : 'Sin zona marcada: se vigila toda la imagen.');
+}
+
 // ---------- análisis ----------
 function cuadroGris() {
-  ctxA.drawImage(video, 0, 0, AW, AH);
+  const z = zona(0);
+  ctxA.drawImage(video, z.x, z.y, z.w, z.h, 0, 0, AW, AH);
   const d = ctxA.getImageData(0, 0, AW, AH).data;
   const g = new Float32Array(AW * AH);
   for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
   return g;
 }
+// Fracción de celdas que cambiaron. Por celdas (y no por píxeles) para que un cambio de texto fino,
+// que al reducir la imagen queda tenue, también cuente.
 function fraccionCambiada(a, b) {
   let n = 0;
-  for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > UMBRAL_PIXEL) n++;
-  return n / a.length;
+  for (let cy = 0; cy < AH; cy += CELDA) for (let cx = 0; cx < AW; cx += CELDA) {
+    let suma = 0;
+    for (let y = cy; y < cy + CELDA; y++) for (let x = cx, i = y * AW + cx; x < cx + CELDA; x++, i++) suma += Math.abs(a[i] - b[i]);
+    if (suma > UMBRAL_CELDA * CELDA * CELDA) n++;
+  }
+  return n / ((AW / CELDA) * (AH / CELDA));
 }
 
 function tick() {
-  if (!activo || ocupado || video.readyState < 2) return;
+  if (!activo || ocupado || marcando || video.readyState < 2) return;
   const cur = cuadroGris();
   const ahora = Date.now();
-  if (!ref) { prev = cur; capturar('auto', cur); return; }
+  if (!ref) { prev = cur; quietoDesde = ahora; capturar('auto', cur); return; }
 
   const movimiento = fraccionCambiada(cur, prev);
   const cambio = fraccionCambiada(cur, ref);
   prev = cur;
-  quietos = movimiento < QUIETO ? quietos + 1 : 0;
+  if (movimiento >= QUIETO) quietoDesde = ahora;
+  const quieta = ahora - quietoDesde >= cfg.quieto * 1000;
+  const sens = cfg.sens / 100;
 
-  const sens = $('sens').value / 100;
   if (cambio > sens) {
     if (!cambioDesde) cambioDesde = ahora;
-    if (quietos >= CUADROS_QUIETOS || ahora - cambioDesde > ESPERA_MAX_MS) capturar('auto', cur);
-    else estado('cambio…');
+    const pausaOk = ahora - ultimaCaptura >= cfg.pausa * 1000;
+    if (pausaOk && (quieta || ahora - cambioDesde > ESPERA_MAX_MS)) capturar('auto', cur);
+    else estado(`cambio ${Math.round(cambio * 100)}%…`);
   } else {
     cambioDesde = 0;
-    if (ahora - ultimaCaptura > RED_MS) {
-      if (cambio > sens / 8 && quietos >= CUADROS_QUIETOS) capturar('red', cur);
-      else if (cambio <= sens / 8) ultimaCaptura = ahora;   // nada cambió: reinicia el reloj de la red
+    if (cfg.red > 0 && quieta && ahora - ultimaRevision > cfg.red * 1000) {
+      if (cambio > sens / 5) capturar('red', cur);
+      else ultimaRevision = ahora;
     }
-    estado('vigilando');
+    estado(`vigilando · ${Math.round(cambio * 100)}%`);
   }
 }
 
 // ---------- captura ----------
 async function capturar(tipo, gris) {
-  if (ocupado) return;
+  if (ocupado || !video.videoWidth) return;
   ocupado = true;
   try {
-    lienzoF.width = video.videoWidth; lienzoF.height = video.videoHeight;
-    lienzoF.getContext('2d').drawImage(video, 0, 0);
+    const z = cfg.recortar ? zona(MARGEN) : { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
+    lienzoF.width = z.w; lienzoF.height = z.h;
+    lienzoF.getContext('2d').drawImage(video, z.x, z.y, z.w, z.h, 0, 0, z.w, z.h);
     const blob = await new Promise(ok => lienzoF.toBlob(ok, 'image/jpeg', CALIDAD_JPEG));
     if (!blob) throw new Error('no se pudo generar la imagen');
-    await guardar({ t: Date.now(), tipo, blob });
+    // esquinas de la pantalla dentro de la foto guardada, para que el corrector la enderece
+    const W = video.videoWidth, H = video.videoHeight;
+    const esq = cfg.quad && cfg.quad.map(p => [(p[0] * W - z.x) / z.w, (p[1] * H - z.y) / z.h]);
+    await guardar({ t: Date.now(), tipo, blob, esq });
     ref = gris || cuadroGris();
-    cambioDesde = 0; ultimaCaptura = Date.now();
+    cambioDesde = 0; ultimaCaptura = ultimaRevision = Date.now();
     total++; $('contador').textContent = total;
-    const img = $('ultima');
-    if (img.src) URL.revokeObjectURL(img.src);
-    img.src = URL.createObjectURL(blob); img.style.display = 'block';
+    if (ultima.src) URL.revokeObjectURL(ultima.src);
+    ultima.src = URL.createObjectURL(blob); ultima.style.display = 'block';
     const f = $('flash'); f.style.transition = 'none'; f.style.opacity = .7;
     requestAnimationFrame(() => { f.style.transition = 'opacity .25s'; f.style.opacity = 0; });
   } catch (e) {
@@ -172,21 +273,63 @@ document.addEventListener('visibilitychange', () => {
   if (activo && document.visibilityState === 'visible') pedirWakeLock();
 });
 
+async function abrirCamara() {
+  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+  const v = { width: { ideal: 3840 }, height: { ideal: 2160 } };
+  if (cfg.camara) v.deviceId = { exact: cfg.camara }; else v.facingMode = { ideal: 'environment' };
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: v }); }
+  catch (e) {
+    if (!cfg.camara) throw e;
+    cfg.camara = ''; guardarCfg();   // la cámara recordada ya no existe: volver a la trasera por defecto
+    return abrirCamara();
+  }
+  video.srcObject = stream;
+  await video.play();
+  pista = stream.getVideoTracks()[0];
+  ajustarVisor(); pintarMarco();
+  await listarCamaras();
+  prepararZoom();
+  const s = pista.getSettings();
+  return `${s.width}×${s.height}`;
+}
+async function listarCamaras() {
+  const sel = $('camara');
+  const camaras = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  const actual = pista && pista.getSettings().deviceId;
+  sel.replaceChildren(...camaras.map((d, i) => new Option(d.label || `Cámara ${i + 1}`, d.deviceId, false, d.deviceId === actual)));
+}
+function prepararZoom() {
+  const cap = pista.getCapabilities ? pista.getCapabilities() : {};
+  const z = $('zoom');
+  $('filaZoom').hidden = !cap.zoom;
+  if (!cap.zoom) return;
+  z.min = cap.zoom.min; z.max = Math.min(cap.zoom.max, 10); z.step = cap.zoom.step || 0.1;
+  z.value = pista.getSettings().zoom || cap.zoom.min;
+  $('zoomTxt').textContent = (+z.value).toFixed(1);
+}
+$('zoom').oninput = async e => {
+  $('zoomTxt').textContent = (+e.target.value).toFixed(1);
+  try { await pista.applyConstraints({ advanced: [{ zoom: +e.target.value }] }); ref = prev = null; }
+  catch (err) { info('Esta cámara no permitió cambiar el zoom: ' + err.message); }
+};
+$('camara').onchange = async e => {
+  cfg.camara = e.target.value; guardarCfg();
+  if (!activo) return;
+  try { const res = await abrirCamara(); ref = prev = null; info(`Cámara: ${res}.`); }
+  catch (err) { info('No se pudo cambiar de cámara: ' + err.message); }
+};
+
 async function iniciar() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } }
-    });
-    video.srcObject = stream;
-    await video.play();
+    const res = await abrirCamara();
     await pedirWakeLock();
-    activo = true; ref = prev = null; quietos = 0; cambioDesde = 0;
+    activo = true; ref = prev = null; cambioDesde = 0;
     timer = setInterval(tick, TICK_MS);
     $('btnIniciar').textContent = 'Detener';
-    $('btnManual').disabled = false;
-    const s = stream.getVideoTracks()[0].getSettings();
-    info(`Cámara: ${s.width}×${s.height}. Deja esta página abierta y la pantalla encendida.`);
+    $('btnManual').disabled = $('btnMarco').disabled = false;
+    info(`Cámara: ${res}. ` + (cfg.quad ? 'Se vigila la zona amarilla.' : 'Toca «Marcar pantalla» y lleva las 4 esquinas al tablero.') +
+         '\nDeja esta página abierta y la pantalla encendida.');
   } catch (e) {
     info('No se pudo abrir la cámara: ' + e.message + '\nLa página debe abrirse por https y con permiso de cámara.');
   }
@@ -194,10 +337,11 @@ async function iniciar() {
 function detener() {
   activo = false; clearInterval(timer);
   if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
-  video.srcObject = null;
+  video.srcObject = null; pista = null;
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  if (marcando) finMarcado();
   $('btnIniciar').textContent = 'Iniciar';
-  $('btnManual').disabled = true;
+  $('btnManual').disabled = $('btnMarco').disabled = true;
   estado('detenido');
 }
 
@@ -223,23 +367,19 @@ async function exportar() {
   if (!ks.length) { info('No hay fotos guardadas.'); return; }
   $('btnExportar').disabled = true;
   try {
-    const partes = [], central = [];
-    let offset = 0, t0 = null;
-    for (let i = 0; i < ks.length; i++) {
-      info(`Preparando ZIP… ${i + 1}/${ks.length}`);
-      const reg = await leer(ks[i]);
-      const d = new Date(reg.t); if (!t0) t0 = d;
-      const nombre = new TextEncoder().encode(
-        `${String(i + 1).padStart(3, '0')}_${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}_${reg.tipo}.jpg`);
-      const crc = crc32(new Uint8Array(await reg.blob.arrayBuffer()));
-      const tam = reg.blob.size, { hora, fecha } = fechaDos(d);
+    const partes = [], central = [], esquinasPorFoto = {};
+    let offset = 0, t0 = null, entradas = 0;
+    const agregar = async (nombreTxt, blob, d) => {
+      const nombre = new TextEncoder().encode(nombreTxt);
+      const crc = crc32(new Uint8Array(await blob.arrayBuffer()));
+      const tam = blob.size, { hora, fecha } = fechaDos(d);
 
       const local = new DataView(new ArrayBuffer(30));
       local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true);
       local.setUint16(10, hora, true); local.setUint16(12, fecha, true);
       local.setUint32(14, crc, true); local.setUint32(18, tam, true); local.setUint32(22, tam, true);
       local.setUint16(26, nombre.length, true);
-      partes.push(local, nombre, reg.blob);
+      partes.push(local, nombre, blob);
 
       const cd = new DataView(new ArrayBuffer(46));
       cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true);
@@ -247,12 +387,21 @@ async function exportar() {
       cd.setUint32(16, crc, true); cd.setUint32(20, tam, true); cd.setUint32(24, tam, true);
       cd.setUint16(28, nombre.length, true); cd.setUint32(42, offset, true);
       central.push(cd, nombre);
-      offset += 30 + nombre.length + tam;
+      offset += 30 + nombre.length + tam; entradas++;
+    };
+    for (let i = 0; i < ks.length; i++) {
+      info(`Preparando ZIP… ${i + 1}/${ks.length}`);
+      const reg = await leer(ks[i]);
+      const d = new Date(reg.t); if (!t0) t0 = d;
+      const nombre = `${String(i + 1).padStart(3, '0')}_${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}_${reg.tipo}.jpg`;
+      await agregar(nombre, reg.blob, d);
+      esquinasPorFoto[nombre] = reg.esq || null;
     }
+    await agregar('esquinas.json', new Blob([JSON.stringify(esquinasPorFoto)]), t0);
     const tamCentral = central.reduce((s, p) => s + p.byteLength, 0);
     const fin = new DataView(new ArrayBuffer(22));
     fin.setUint32(0, 0x06054b50, true);
-    fin.setUint16(8, ks.length, true); fin.setUint16(10, ks.length, true);
+    fin.setUint16(8, entradas, true); fin.setUint16(10, entradas, true);
     fin.setUint32(12, tamCentral, true); fin.setUint32(16, offset, true);
 
     const nombreZip = `clase_${t0.getFullYear()}-${p2(t0.getMonth() + 1)}-${p2(t0.getDate())}_${p2(t0.getHours())}${p2(t0.getMinutes())}.zip`;
@@ -286,10 +435,33 @@ $('btnManual').onclick = () => capturar('manual');
 $('btnExportar').onclick = exportar;
 $('btnBorrar').onclick = async () => {
   if (!confirm('¿Borrar todas las fotos guardadas en este celular? Exporta primero si no lo has hecho.')) return;
-  await vaciar(); total = 0; $('contador').textContent = 0; $('ultima').style.display = 'none';
+  await vaciar(); total = 0; $('contador').textContent = 0; ultima.style.display = 'none';
   info('Fotos borradas.');
 };
-$('sens').oninput = e => $('sensTxt').textContent = e.target.value;
+$('btnMarco').onclick = () => {
+  if (marcando) { finMarcado(); return; }
+  if (!cfg.quad) cfg.quad = [[.25, .3], [.75, .3], [.75, .7], [.25, .7]];
+  marcando = true; visor.classList.add('marcando');
+  $('btnMarco').textContent = 'Listo';
+  pintarMarco();
+  info('Arrastra cada círculo amarillo hasta una esquina del tablero o televisor y toca «Listo».');
+};
+$('btnQuitarMarco').onclick = () => { cfg.quad = null; finMarcado(); };
+ultima.onclick = () => ultima.classList.toggle('grande');
+
+// controles de configuración: [id, clave en cfg, cómo mostrar el valor]
+const controles = [
+  ['sens', 'sens', v => v],
+  ['quieto', 'quieto', v => (+v).toFixed(1)],
+  ['pausa', 'pausa', v => v],
+  ['red', 'red', v => +v ? v + ' s' : '— (apagada)'],
+];
+for (const [id, clave, txt] of controles) {
+  $(id).value = cfg[clave]; $(id + 'Txt').textContent = txt(cfg[clave]);
+  $(id).oninput = e => { cfg[clave] = +e.target.value; $(id + 'Txt').textContent = txt(e.target.value); guardarCfg(); };
+}
+$('recortar').checked = cfg.recortar;
+$('recortar').onchange = e => { cfg.recortar = e.target.checked; guardarCfg(); };
 
 contar().then(n => {
   total = n; $('contador').textContent = n;

@@ -41,6 +41,19 @@
   select { min-height: 40px; font-size: 16px; background: #2a2f37; color: #e8eaed; border: 0; border-radius: 8px; padding: 0 8px; }
   input[type=checkbox] { width: 22px; height: 22px; }
   #info { margin-top: 10px; font-size: 13px; color: #c3c8cf; white-space: pre-line; }
+  #revision { position: fixed; inset: 0; z-index: 20; background: #0b0d10; overflow-y: auto;
+              padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
+  #revision[hidden] { display: none; }
+  #revTitulo { display: block; font-size: 17px; }
+  #revAyuda { font-size: 13px; color: #c3c8cf; margin-top: 4px; }
+  #revGrilla { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 12px; }
+  .pagina { position: relative; border-radius: 8px; overflow: hidden; background: #000; }
+  .pagina img { display: block; width: 100%; }
+  .pagina span { position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,.7); border-radius: 6px; padding: 1px 7px; font-size: 13px; }
+  .pagina.fuera img { opacity: .25; }
+  .pagina.fuera::after { content: 'quitada'; position: absolute; inset: auto 0 0 0; background: #5a1f24; color: #ffe1e3;
+                         text-align: center; font-size: 13px; padding: 2px; }
+  .rev-pie { position: sticky; bottom: 0; background: #0b0d10; padding-top: 8px; }
 </style>
 </head>
 <body>
@@ -86,20 +99,40 @@
     <label>Red de seguridad (revisa cambios pequeños) cada <span id="redTxt"></span>
       <input id="red" type="range" min="0" max="120" step="5">
     </label>
-    <label>Girar las fotos (si salen de lado)
+    <label>Orientación de las fotos
       <select id="giro">
-        <option value="0">Sin girar</option>
-        <option value="90">90° a la derecha</option>
-        <option value="180">180°</option>
-        <option value="270">90° a la izquierda</option>
+        <option value="auto">Siempre horizontal (automático)</option>
+        <option value="0">Como sale de la cámara</option>
+        <option value="90">Girar 90° a la derecha</option>
+        <option value="180">Girar 180°</option>
+        <option value="270">Girar 90° a la izquierda</option>
       </select>
     </label>
+    <label class="casilla"><input id="voltear" type="checkbox"> Voltear 180° (si salen de cabeza)</label>
     <label class="casilla"><input id="bloqueo" type="checkbox" disabled> <span id="bloqueoTxt">Bloquear enfoque (inicia la cámara para saber si se puede)</span></label>
     <label class="casilla"><input id="recortar" type="checkbox"> Guardar solo la zona marcada (con un margen)</label>
     <div class="fila"><button id="btnQuitarMarco">Quitar zona marcada</button></div>
   </details>
   <div id="info">Pon el celular fijo (trípode o soporte), toca Iniciar y luego «Marcar pantalla» para llevar las 4 esquinas amarillas a las esquinas del tablero o televisor.</div>
 </main>
+
+<div id="revision" hidden>
+  <strong id="revTitulo"></strong>
+  <div id="revAyuda">Toca una diapositiva para quitarla o volver a ponerla.</div>
+  <label>Filtro
+    <select id="filtro">
+      <option value="mejorado">Mejorado (color, contraste y nitidez)</option>
+      <option value="original">Original (solo enderezada)</option>
+      <option value="byn">Blanco y negro (texto)</option>
+    </select>
+  </label>
+  <label class="casilla"><input id="ocr" type="checkbox"> Reconocer el texto (PDF buscable y copiable; tarda más)</label>
+  <div id="revGrilla"></div>
+  <div class="fila rev-pie">
+    <button id="btnRevVolver">Volver</button>
+    <button id="btnRevGuardar" class="primario">Guardar PDF</button>
+  </div>
+</div>
 
 <script>
 // ---------- parámetros fijos ----------
@@ -116,9 +149,14 @@ const MISMA_DIAPOSITIVA = 0.6;   // al exportar: fracción de celdas con conteni
 const ANCHO_PDF = 1600;          // ancho máximo en píxeles de cada diapositiva enderezada
 
 // ---------- configuración (se recuerda entre sesiones) ----------
-const cfg = { sens: 20, quieto: 0.6, pausa: 3, red: 30, recortar: true, quad: null, camara: '', giro: 0, bloqueo: false };
-try { Object.assign(cfg, JSON.parse(localStorage.getItem('cfg2') || '{}')); } catch (e) {}
-function guardarCfg() { try { localStorage.setItem('cfg2', JSON.stringify(cfg)); } catch (e) {} }
+const cfg = { sens: 20, quieto: 0.6, pausa: 3, red: 15, recortar: true, quad: null, camara: '', giro: 'auto', voltear: false,
+              bloqueo: false, filtro: 'mejorado', ocr: true };
+try {
+  const guardada = localStorage.getItem('cfg3');
+  if (guardada) Object.assign(cfg, JSON.parse(guardada));
+  else Object.assign(cfg, JSON.parse(localStorage.getItem('cfg2') || '{}'), { giro: 'auto', red: 15 });   // versión anterior
+} catch (e) {}
+function guardarCfg() { try { localStorage.setItem('cfg3', JSON.stringify(cfg)); } catch (e) {} }
 
 const $ = id => document.getElementById(id);
 const video = $('video'), visor = $('visor'), marco = $('marco');
@@ -219,12 +257,12 @@ function cuadroGris() {
 // Compara dos cuadros celda por celda. Una celda con contenido "cambió" si su dibujo ya no se parece
 // (correlación baja); así un cambio de brillo o de exposición de la cámara no cuenta como cambio.
 // Una celda lisa solo cambió si su brillo se movió mucho más que el del cuadro completo.
-function comparar(a, b) {
-  const n = CELDA * CELDA;
+// celdas(): para cada celda, si tiene contenido en a (ca) y en b (cb) y si muestra lo mismo en ambas (igual)
+function celdas(a, b) {
+  const n = CELDA * CELDA, res = [];
   let ma = 0, mb = 0;
   for (let i = 0; i < a.length; i++) { ma += a[i]; mb += b[i]; }
   const d0 = (ma - mb) / a.length;
-  let cambiadas = 0, contenido = 0, cambiadasContenido = 0;
   for (let cy = 0; cy < AH; cy += CELDA) for (let cx = 0; cx < AW; cx += CELDA) {
     let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
     for (let y = cy; y < cy + CELDA; y++) for (let x = cx, i = y * AW + cx; x < cx + CELDA; x++, i++) {
@@ -233,16 +271,27 @@ function comparar(a, b) {
     }
     const da = Math.sqrt(Math.max(0, saa / n - (sa / n) ** 2)), db = Math.sqrt(Math.max(0, sbb / n - (sb / n) ** 2));
     const dm = Math.abs((sa - sb) / n - d0);
-    let cambio;
-    if (Math.max(da, db) < TEXTURA_MIN) {
-      cambio = dm > 25;
-      if (!cambio) continue;      // lisa en ambos y sin cambio: no aporta
-    } else if (Math.min(da, db) < 2) cambio = true;
-    else cambio = (sab / n - (sa / n) * (sb / n)) / (da * db) < NCC_IGUAL || dm > 40;
-    contenido++;
-    if (cambio) { cambiadas++; cambiadasContenido++; }
+    let igual;
+    if (Math.max(da, db) < TEXTURA_MIN) igual = dm <= 25;
+    else if (Math.min(da, db) < 2) igual = false;
+    else igual = (sab / n - (sa / n) * (sb / n)) / (da * db) >= NCC_IGUAL && dm <= 40;
+    res.push({ ca: da >= TEXTURA_MIN, cb: db >= TEXTURA_MIN, igual });
   }
-  return { cambio: cambiadas / ((AW / CELDA) * (AH / CELDA)), parecido: contenido ? 1 - cambiadasContenido / contenido : 1 };
+  return res;
+}
+function comparar(a, b) {
+  const cs = celdas(a, b);
+  const cambiadas = cs.filter(c => !c.igual).length;
+  const contenido = cs.filter(c => c.ca || c.cb || !c.igual).length;   // las lisas e iguales no aportan
+  return { cambio: cambiadas / cs.length, parecido: contenido ? 1 - cambiadas / contenido : 1 };
+}
+// ¿a es una versión incompleta de b? (diapositiva cuyas viñetas o imágenes van apareciendo)
+function esVersionPrevia(a, b) {
+  const cs = celdas(a, b), conA = cs.filter(c => c.ca);
+  if (conA.length < 3) return false;
+  const mantenidas = conA.filter(c => c.igual).length / conA.length;
+  const nuevas = cs.filter(c => !c.ca && c.cb && !c.igual).length;
+  return mantenidas >= 0.85 && nuevas >= Math.max(3, 0.1 * conA.length);
 }
 const fraccionCambiada = (a, b) => comparar(a, b).cambio;
 
@@ -280,8 +329,8 @@ async function capturar(tipo, gris) {
   ocupado = true;
   try {
     const z = cfg.recortar ? zona(MARGEN) : { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
-    // la foto se guarda ya girada (cfg.giro, en grados a la derecha)
-    const g = cfg.giro, deLado = g === 90 || g === 270;
+    // la foto se guarda ya girada (en grados a la derecha)
+    const g = giroActual(cfg.quad ? zona(0) : null), deLado = g === 90 || g === 270;
     lienzoF.width = deLado ? z.h : z.w; lienzoF.height = deLado ? z.w : z.h;
     const ctx = lienzoF.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -307,6 +356,31 @@ async function capturar(tipo, gris) {
   } finally {
     ocupado = false;
   }
+}
+
+// ---------- orientación ----------
+// Con el bloqueo de rotación del iPhone, la cámara entrega cuadros verticales aunque el celular esté horizontal.
+// En modo automático la foto se gira para que la pantalla quede horizontal: un tablero o televisor siempre es
+// más ancho que alto, así que si la zona guardada sale más alta que ancha, se gira. El sentido sale del
+// acelerómetro (hacia qué lado apunta la gravedad); sin acelerómetro se usa el habitual y «Voltear» lo corrige.
+let gravedad = null;
+addEventListener('devicemotion', e => {
+  const a = e.accelerationIncludingGravity;
+  if (a && a.x != null) gravedad = { x: a.x, y: a.y };
+});
+async function pedirSensorMovimiento() {
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) await DeviceMotionEvent.requestPermission();
+  } catch (e) {}
+}
+function giroActual(z) {
+  const ancho = z ? z.w : video.videoWidth, alto = z ? z.h : video.videoHeight;
+  let g;
+  if (cfg.giro !== 'auto') g = +cfg.giro;
+  else if (alto <= ancho) g = 0;   // ya está horizontal
+  else if (gravedad && Math.abs(gravedad.x) > Math.abs(gravedad.y) + 2) g = gravedad.x > 0 ? 270 : 90;
+  else g = 270;
+  return (g + (cfg.voltear ? 180 : 0)) % 360;
 }
 
 // ---------- cámara ----------
@@ -385,6 +459,7 @@ $('camara').onchange = async e => {
 
 async function iniciar() {
   try {
+    await pedirSensorMovimiento();   // en iPhone debe pedirse al tocar un botón
     const res = await abrirCamara();
     await pedirWakeLock();
     activo = true; ref = prev = null; cambioDesde = 0;
@@ -490,7 +565,7 @@ async function entregar(archivo) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 
-// ---------- exportar PDF limpio: enderezar, quitar repetidas, mejorar contraste ----------
+// ---------- enderezar (corrección de perspectiva) ----------
 function ordenarEsquinas(q) {   // → arriba-izq, arriba-der, abajo-der, abajo-izq
   const por = f => q.reduce((m, p) => f(p) < f(m) ? p : m);
   return [por(p => p[0] + p[1]), por(p => p[1] - p[0]), por(p => -p[0] - p[1]), por(p => p[0] - p[1])];
@@ -550,21 +625,77 @@ function enderezar(bitmap, esq, ladoFuente, anchoMax) {
   cs.putImageData(img, 0, 0);
   return salida;
 }
-// Estira el contraste (percentiles 1-99 del brillo) sin alterar los colores
-function mejorar(lienzo) {
-  const ctx = lienzo.getContext('2d'), img = ctx.getImageData(0, 0, lienzo.width, lienzo.height), d = img.data;
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < d.length; i += 4) hist[(d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8]++;
-  const n = d.length / 4;
-  let lo = 0, hi = 255, acum = 0;
-  for (let v = 0; v < 256; v++) { acum += hist[v]; if (acum >= n * 0.01) { lo = v; break; } }
-  acum = 0;
-  for (let v = 255; v >= 0; v--) { acum += hist[v]; if (acum >= n * 0.01) { hi = v; break; } }
-  if (hi - lo <= 40 || (lo < 4 && hi > 251)) return;
+// ---------- filtros tipo escáner ----------
+// Desenfoque de caja separable sobre un canal (Float32Array w×h), radio r
+function desenfocar(c, w, h, r) {
+  const tmp = new Float32Array(c.length), out = new Float32Array(c.length), k = 2 * r + 1;
+  for (let y = 0; y < h; y++) {
+    let s = 0;
+    for (let x = -r; x <= r; x++) s += c[y * w + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) {
+      tmp[y * w + x] = s / k;
+      s += c[y * w + Math.min(w - 1, x + r + 1)] - c[y * w + Math.max(0, x - r)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let s = 0;
+    for (let y = -r; y <= r; y++) s += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      out[y * w + x] = s / k;
+      s += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+    }
+  }
+  return out;
+}
+function percentil(hist, n, p) {
+  let acum = 0;
+  for (let v = 0; v < 256; v++) { acum += hist[v]; if (acum >= n * p) return v; }
+  return 255;
+}
+// Mejorado: balance de blancos, niveles, nitidez y un poco más de color
+function filtroMejorado(lienzo) {
+  const W = lienzo.width, H = lienzo.height, ctx = lienzo.getContext('2d');
+  const img = ctx.getImageData(0, 0, W, H), d = img.data, n = W * H;
+  const lum = new Float32Array(n), hist = new Uint32Array(256);
+  for (let i = 0, j = 0; j < n; i += 4, j++) { lum[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; hist[lum[j] | 0]++; }
+  // balance de blancos con el 5 % más claro, solo si esa zona ya es casi gris (no teñir títulos de color)
+  const umbral = percentil(hist, n, 0.95);
+  let r = 0, g = 0, b = 0, m = 0;
+  for (let i = 0, j = 0; j < n; i += 4, j++) if (lum[j] >= umbral) { r += d[i]; g += d[i + 1]; b += d[i + 2]; m++; }
+  let gr = 1, gg = 1, gb = 1;
+  if (m) {
+    r /= m; g /= m; b /= m;
+    const prom = (r + g + b) / 3;
+    if (Math.max(r, g, b) / Math.max(1, Math.min(r, g, b)) < 1.3) { gr = prom / r; gg = prom / g; gb = prom / b; }
+  }
+  const lo = percentil(hist, n, 0.005), hi = Math.max(lo + 40, percentil(hist, n, 0.995));
   const k = 255 / (hi - lo);
-  for (let i = 0; i < d.length; i += 4) { d[i] = (d[i] - lo) * k; d[i + 1] = (d[i + 1] - lo) * k; d[i + 2] = (d[i + 2] - lo) * k; }
+  const detalle = desenfocar(lum, W, H, Math.max(1, Math.round(W / 700)));
+  for (let i = 0, j = 0; j < n; i += 4, j++) {
+    const realce = 0.8 * (lum[j] - detalle[j]);
+    let R = (d[i] * gr - lo) * k + realce, G = (d[i + 1] * gg - lo) * k + realce, B = (d[i + 2] * gb - lo) * k + realce;
+    const med = (R + G + B) / 3;
+    d[i] = med + (R - med) * 1.15; d[i + 1] = med + (G - med) * 1.15; d[i + 2] = med + (B - med) * 1.15;
+  }
   ctx.putImageData(img, 0, 0);
 }
+// Blanco y negro: umbral adaptativo (como un escáner de documentos); en diapositivas oscuras invierte primero
+function filtroByN(lienzo) {
+  const W = lienzo.width, H = lienzo.height, ctx = lienzo.getContext('2d');
+  const img = ctx.getImageData(0, 0, W, H), d = img.data, n = W * H;
+  const lum = new Float32Array(n), hist = new Uint32Array(256);
+  for (let i = 0, j = 0; j < n; i += 4, j++) { lum[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; hist[lum[j] | 0]++; }
+  if (percentil(hist, n, 0.5) < 110) for (let j = 0; j < n; j++) lum[j] = 255 - lum[j];
+  const fondo = desenfocar(lum, W, H, Math.max(8, Math.round(W / 40)));
+  for (let i = 0, j = 0; j < n; i += 4, j++) d[i] = d[i + 1] = d[i + 2] = lum[j] < fondo[j] * 0.92 - 4 ? 0 : 255;
+  ctx.putImageData(img, 0, 0);
+}
+function filtrar(lienzo, filtro) {
+  if (filtro === 'mejorado') filtroMejorado(lienzo);
+  else if (filtro === 'byn') filtroByN(lienzo);
+}
+
+// ---------- elegir y combinar fotos ----------
 function nitidez(g) {   // varianza del laplaciano sobre el cuadro de análisis
   let s = 0, s2 = 0, n = 0;
   for (let y = 1; y < AH - 1; y++) for (let x = 1, i = y * AW + 1; x < AW - 1; x++, i++) {
@@ -573,20 +704,88 @@ function nitidez(g) {   // varianza del laplaciano sobre el cuadro de análisis
   }
   return s2 / n - (s / n) ** 2;
 }
-// De un grupo de fotos de la misma diapositiva: la más parecida a la mediana (la menos tapada); si empatan, la más nítida
-function elegir(grupo, fichas) {
+// De un grupo de fotos de la misma diapositiva: la más parecida a la mediana (la menos tapada); si empatan, la más nítida.
+// `apoyo` son fotos que no se eligen pero ayudan a calcular la mediana (p. ej. la versión anterior sin todas las viñetas).
+function elegir(grupo, fichas, apoyo = []) {
   const masNitida = cand => cand.reduce((m, k) => fichas[k].nitidez > fichas[m].nitidez ? k : m);
-  if (grupo.length < 3) return masNitida(grupo);
-  const dif = grupo.map(() => 0), vals = new Float32Array(grupo.length);
+  const todas = [...grupo, ...apoyo];
+  if (todas.length < 3) return masNitida(grupo);
+  const dif = grupo.map(() => 0), vals = new Float32Array(todas.length);
   for (let i = 0; i < AW * AH; i++) {
-    for (let j = 0; j < grupo.length; j++) vals[j] = fichas[grupo[j]].huella[i];
-    const med = Float32Array.from(vals).sort()[grupo.length >> 1];
+    for (let j = 0; j < todas.length; j++) vals[j] = fichas[todas[j]].huella[i];
+    const med = Float32Array.from(vals).sort()[todas.length >> 1];
     for (let j = 0; j < grupo.length; j++) dif[j] += Math.abs(vals[j] - med);
   }
   const minimo = Math.min(...dif);
   return masNitida(grupo.filter((k, j) => dif[j] <= minimo + 1.5 * AW * AH));
 }
-// PDF mínimo: una página por imagen JPEG
+async function enderezarFoto(clave) {
+  const reg = await leer(clave);
+  const bm = await createImageBitmap(reg.blob);
+  const c = enderezar(bm, reg.esq, 4096, ANCHO_PDF);
+  bm.close();
+  return c;
+}
+// Combina hasta 5 fotos de la misma diapositiva tomando la mediana de cada píxel: quien estuvo de pie
+// frente a la pantalla en alguna de ellas desaparece del resultado. Solo se combinan fotos con las mismas
+// esquinas marcadas (cámara en el mismo sitio), para que los píxeles coincidan.
+const mismasEsquinas = (a, b) => a && b && a.every((p, i) => Math.abs(p[0] - b[i][0]) < 0.004 && Math.abs(p[1] - b[i][1]) < 0.004);
+async function componer(pagina, fichas) {
+  const mejor = pagina.rep;
+  const alineadas = [mejor, ...pagina.miembros.filter(k => k !== mejor && mismasEsquinas(fichas[k].esq, fichas[mejor].esq))
+    .sort((a, b) => fichas[b].nitidez - fichas[a].nitidez)].slice(0, 5);
+  const base = await enderezarFoto(fichas[mejor].clave);
+  if (alineadas.length < 3) return base;
+  const W = base.width, H = base.height, capas = [base.getContext('2d').getImageData(0, 0, W, H).data];
+  for (const k of alineadas.slice(1)) {
+    const c = await enderezarFoto(fichas[k].clave);
+    if (c.width === W && c.height === H) capas.push(c.getContext('2d').getImageData(0, 0, W, H).data);
+  }
+  if (capas.length < 3) return base;
+  const ctx = base.getContext('2d'), img = ctx.getImageData(0, 0, W, H), d = img.data, v = new Array(capas.length);
+  for (let i = 0; i < d.length; i++) {
+    if ((i & 3) === 3) continue;
+    for (let j = 0; j < capas.length; j++) v[j] = capas[j][i];
+    v.sort((a, b) => a - b);
+    d[i] = v[capas.length >> 1];
+  }
+  ctx.putImageData(img, 0, 0);
+  return base;
+}
+
+// ---------- texto (OCR) ----------
+let trabajadorOcr = null;
+function cargarScript(url) {
+  return new Promise((ok, err) => {
+    const s = Object.assign(document.createElement('script'), { src: url, onload: ok, onerror: () => err(new Error('sin conexión')) });
+    document.head.appendChild(s);
+  });
+}
+async function reconocer(blob) {
+  if (!trabajadorOcr) {
+    if (!window.Tesseract) await cargarScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+    trabajadorOcr = await Tesseract.createWorker('spa');
+  }
+  const { data } = await trabajadorOcr.recognize(blob);
+  return (data.words || []).filter(w => w.confidence > 40 && w.text.trim())
+    .map(w => ({ texto: w.text.trim(), x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 }));
+}
+
+// ---------- PDF ----------
+// Texto PDF en WinAnsi: ASCII tal cual, tildes y ñ como octal, el resto aproximado
+function textoPdf(s) {
+  const otros = { '‘': "'", '’': "'", '“': '"', '”': '"', '–': '-', '—': '-', '…': '...', '•': '\\225' };
+  let r = '';
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (ch === '(' || ch === ')' || ch === '\\') r += '\\' + ch;
+    else if (c >= 32 && c < 127) r += ch;
+    else if (c >= 160 && c <= 255) r += '\\' + c.toString(8).padStart(3, '0');
+    else r += otros[ch] || '?';
+  }
+  return r;
+}
+// Una página por imagen JPEG; si hay palabras reconocidas, van como texto invisible encima (PDF buscable)
 function armarPdf(paginas, nombre) {
   const partes = [], offsets = [];
   let pos = 0;
@@ -595,22 +794,36 @@ function armarPdf(paginas, nombre) {
   const objeto = (n, cuerpo) => { offsets[n] = pos; poner(`${n} 0 obj\n${cuerpo}\nendobj\n`); };
   poner('%PDF-1.4\n');
   objeto(1, '<< /Type /Catalog /Pages 2 0 R >>');
-  objeto(2, `<< /Type /Pages /Count ${paginas.length} /Kids [${paginas.map((p, i) => `${3 + 3 * i} 0 R`).join(' ')}] >>`);
+  objeto(2, `<< /Type /Pages /Count ${paginas.length} /Kids [${paginas.map((p, i) => `${4 + 3 * i} 0 R`).join(' ')}] >>`);
+  objeto(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
   paginas.forEach((p, i) => {
-    const n = 3 + 3 * i, w = (p.w * 0.5).toFixed(1), h = (p.h * 0.5).toFixed(1);   // 0,5 pt por píxel
-    const dibujo = `q ${w} 0 0 ${h} 0 0 cm /Im0 Do Q`;
-    objeto(n, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /XObject << /Im0 ${n + 2} 0 R >> >> /Contents ${n + 1} 0 R >>`);
-    objeto(n + 1, `<< /Length ${dibujo.length} >>\nstream\n${dibujo}\nendstream`);
+    const n = 4 + 3 * i, e = 0.5, w = (p.w * e).toFixed(1), h = (p.h * e).toFixed(1);   // 0,5 pt por píxel
+    let dibujo = `q ${w} 0 0 ${h} 0 0 cm /Im0 Do Q`;
+    if (p.palabras && p.palabras.length) {
+      dibujo += '\nBT 3 Tr';
+      for (const pal of p.palabras) {
+        const t = Math.max(1, (pal.y1 - pal.y0) * e), ancho = (pal.x1 - pal.x0) * e;
+        const tz = Math.min(400, Math.max(20, 100 * ancho / (pal.texto.length * 0.5 * t)));
+        dibujo += `\n/F1 ${t.toFixed(1)} Tf ${tz.toFixed(0)} Tz 1 0 0 1 ${(pal.x0 * e).toFixed(1)} ${((p.h - pal.y1) * e).toFixed(1)} Tm (${textoPdf(pal.texto)}) Tj`;
+      }
+      dibujo += '\nET';
+    }
+    objeto(n, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /XObject << /Im0 ${n + 2} 0 R >> /Font << /F1 3 0 R >> >> /Contents ${n + 1} 0 R >>`);
+    objeto(n + 1, `<< /Length ${cod.encode(dibujo).length} >>\nstream\n${dibujo}\nendstream`);
     offsets[n + 2] = pos;
     poner(`${n + 2} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${p.w} /Height ${p.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.blob.size} >>\nstream\n`);
     poner(p.blob);
     poner('\nendstream\nendobj\n');
   });
-  const total = 3 + 3 * paginas.length, xref = pos;
+  const total = 4 + 3 * paginas.length, xref = pos;
   poner(`xref\n0 ${total}\n0000000000 65535 f \n` + offsets.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join(''));
   poner(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
   return new File(partes, nombre, { type: 'application/pdf' });
 }
+
+// ---------- exportar PDF: procesar → revisar → guardar ----------
+const aJpeg = (lienzo, calidad) => new Promise(ok => lienzo.toBlob(ok, 'image/jpeg', calidad));
+let revision = null;   // { nombre, paginas: [{ base, w, h, final, mini, fuera }] }
 
 async function exportarPdf() {
   const ks = await claves();
@@ -628,7 +841,7 @@ async function exportarPdf() {
       const c = enderezar(bm, reg.esq, 960, 480);
       bm.close();
       const huella = grisDe(c, 0, 0, c.width, c.height);
-      fichas.push({ clave: ks[i], huella, nitidez: nitidez(huella) });
+      fichas.push({ clave: ks[i], huella, nitidez: nitidez(huella), esq: reg.esq });
     }
     // 2) agrupar las seguidas que muestran la misma diapositiva
     const grupos = [[0]];
@@ -637,27 +850,104 @@ async function exportarPdf() {
       if (g.slice(-3).some(j => comparar(fichas[k].huella, fichas[j].huella).parecido >= MISMA_DIAPOSITIVA)) g.push(k);
       else grupos.push([k]);
     }
-    // 3) la mejor de cada grupo, enderezada a buen tamaño y con el contraste mejorado
+    // 3) si el profe vuelve a una diapositiva anterior, no repetirla
     const paginas = [];
-    for (let n = 0; n < grupos.length; n++) {
-      info(`Armando PDF… diapositiva ${n + 1}/${grupos.length}`);
-      const reg = await leer(fichas[elegir(grupos[n], fichas)].clave);
-      const bm = await createImageBitmap(reg.blob);
-      const c = enderezar(bm, reg.esq, 4096, ANCHO_PDF);
-      bm.close();
-      mejorar(c);
-      const blob = await new Promise(ok => c.toBlob(ok, 'image/jpeg', CALIDAD_JPEG));
-      paginas.push({ blob, w: c.width, h: c.height });
+    for (const g of grupos) {
+      const rep = elegir(g, fichas);
+      const igual = paginas.find(p => p.miembros.some(j => comparar(fichas[rep].huella, fichas[j].huella).parecido >= MISMA_DIAPOSITIVA));
+      if (igual) { igual.miembros.push(...g); igual.rep = elegir(igual.miembros, fichas); }
+      else paginas.push({ miembros: [...g], rep });
+    }
+    // 4) diapositivas que se van completando (viñetas que aparecen): quedarse solo con la versión completa
+    for (let i = paginas.length - 2; i >= 0; i--) {
+      if (!esVersionPrevia(fichas[paginas[i].rep].huella, fichas[paginas[i + 1].rep].huella)) continue;
+      const siguiente = paginas[i + 1];
+      siguiente.apoyo = [...(siguiente.apoyo || []), ...paginas[i].miembros, ...(paginas[i].apoyo || [])];
+      siguiente.rep = elegir(siguiente.miembros, fichas, siguiente.apoyo);
+      paginas.splice(i, 1);
+    }
+    // 5) cada diapositiva enderezada, combinando fotos para borrar a quien la tapaba
+    const listas = [];
+    for (let n = 0; n < paginas.length; n++) {
+      info(`Enderezando y limpiando… diapositiva ${n + 1}/${paginas.length}`);
+      const c = await componer(paginas[n], fichas);
+      listas.push({ base: await aJpeg(c, 0.95), w: c.width, h: c.height, fuera: false });
     }
     const nombre = `clase_${t0.getFullYear()}-${p2(t0.getMonth() + 1)}-${p2(t0.getDate())}_${p2(t0.getHours())}${p2(t0.getMinutes())}.pdf`;
-    const pdf = armarPdf(paginas, nombre);
-    info(`PDF listo: ${ks.length} fotos → ${paginas.length} diapositivas, ${(pdf.size / 1048576).toFixed(1)} MB.` +
-         '\nLas fotos originales siguen guardadas hasta que toques «Borrar fotos».');
-    await entregar(pdf);
+    revision = { nombre, fotos: ks.length, paginas: listas };
+    $('revision').hidden = false;
+    await aplicarFiltro();
+    info('');
   } catch (e) {
-    info('Error al armar el PDF: ' + e.message);
+    info('Error al preparar el PDF: ' + e.message);
   } finally {
     $('btnPdf').disabled = false;
+  }
+}
+
+// Aplica el filtro elegido a todas las páginas y pinta la grilla de revisión
+let filtrando = Promise.resolve();
+function aplicarFiltro() {
+  filtrando = filtrando.then(async () => {
+    if (!revision) return;
+    $('btnRevGuardar').disabled = true;
+    const ps = revision.paginas;
+    for (let i = 0; i < ps.length; i++) {
+      $('revTitulo').textContent = `Aplicando filtro… ${i + 1}/${ps.length}`;
+      const bm = await createImageBitmap(ps[i].base);
+      const c = document.createElement('canvas'); c.width = ps[i].w; c.height = ps[i].h;
+      c.getContext('2d').drawImage(bm, 0, 0);
+      bm.close();
+      filtrar(c, cfg.filtro);
+      ps[i].final = await aJpeg(c, CALIDAD_JPEG);
+      const m = document.createElement('canvas'); m.width = 320; m.height = Math.round(320 * c.height / c.width);
+      m.getContext('2d').drawImage(c, 0, 0, m.width, m.height);
+      if (ps[i].mini) URL.revokeObjectURL(ps[i].mini);
+      ps[i].mini = URL.createObjectURL(await aJpeg(m, 0.8));
+    }
+    pintarRevision();
+    $('btnRevGuardar').disabled = false;
+  });
+  return filtrando;
+}
+function pintarRevision() {
+  const ps = revision.paginas, quedan = ps.filter(p => !p.fuera).length;
+  $('revTitulo').textContent = `${revision.fotos} fotos → ${quedan} diapositivas`;
+  $('btnRevGuardar').textContent = `Guardar PDF (${quedan})`;
+  $('revGrilla').replaceChildren(...ps.map((p, i) => {
+    const d = Object.assign(document.createElement('div'), { className: 'pagina' + (p.fuera ? ' fuera' : '') });
+    d.append(Object.assign(document.createElement('img'), { src: p.mini, alt: `diapositiva ${i + 1}` }),
+             Object.assign(document.createElement('span'), { textContent: i + 1 }));
+    d.onclick = () => { p.fuera = !p.fuera; pintarRevision(); };
+    return d;
+  }));
+}
+async function guardarPdf() {
+  await filtrando;
+  const ps = revision.paginas.filter(p => !p.fuera);
+  if (!ps.length) return;
+  $('btnRevGuardar').disabled = true;
+  try {
+    const paginas = [];
+    let sinTexto = false;
+    for (let i = 0; i < ps.length; i++) {
+      let palabras = [];
+      if (cfg.ocr && !sinTexto) {
+        $('revTitulo').textContent = `Leyendo el texto… ${i + 1}/${ps.length}`;
+        try { palabras = await reconocer(ps[i].final); }
+        catch (e) { sinTexto = true; info('No se pudo reconocer el texto (' + e.message + '); el PDF sale sin texto.'); }
+      }
+      paginas.push({ blob: ps[i].final, w: ps[i].w, h: ps[i].h, palabras });
+    }
+    const pdf = armarPdf(paginas, revision.nombre);
+    pintarRevision();
+    await entregar(pdf);
+    if (!sinTexto) info(`PDF listo: ${paginas.length} diapositivas, ${(pdf.size / 1048576).toFixed(1)} MB.` +
+                        '\nLas fotos originales siguen guardadas hasta que toques «Borrar fotos».');
+  } catch (e) {
+    info('Error al guardar el PDF: ' + e.message);
+  } finally {
+    $('btnRevGuardar').disabled = false;
   }
 }
 
@@ -669,8 +959,16 @@ $('btnIniciar').onclick = () => activo ? detener() : iniciar();
 $('btnManual').onclick = () => capturar('manual');
 $('btnExportar').onclick = exportar;
 $('btnPdf').onclick = exportarPdf;
-$('giro').value = cfg.giro;
-$('giro').onchange = e => { cfg.giro = +e.target.value; guardarCfg(); };
+$('giro').value = String(cfg.giro);
+$('giro').onchange = e => { cfg.giro = e.target.value === 'auto' ? 'auto' : +e.target.value; guardarCfg(); };
+$('voltear').checked = cfg.voltear;
+$('voltear').onchange = e => { cfg.voltear = e.target.checked; guardarCfg(); };
+$('filtro').value = cfg.filtro;
+$('filtro').onchange = e => { cfg.filtro = e.target.value; guardarCfg(); aplicarFiltro(); };
+$('ocr').checked = cfg.ocr;
+$('ocr').onchange = e => { cfg.ocr = e.target.checked; guardarCfg(); };
+$('btnRevVolver').onclick = () => { $('revision').hidden = true; };
+$('btnRevGuardar').onclick = guardarPdf;
 $('btnBorrar').onclick = async () => {
   if (!confirm('¿Borrar todas las fotos guardadas en este celular? Exporta primero si no lo has hecho.')) return;
   await vaciar(); total = 0; $('contador').textContent = 0; ultima.style.display = 'none';

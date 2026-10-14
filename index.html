@@ -87,16 +87,18 @@
     <label>Cámara
       <select id="camara"></select>
     </label>
-    <label>Sensibilidad: dispara cuando cambia el <span id="sensTxt"></span>% de la zona (más alto = menos fotos)
-      <input id="sens" type="range" min="3" max="60">
+    <label>Sensibilidad: dispara cuando aparece contenido nuevo en al menos el <span id="sensTxt"></span>% de la zona
+      (más bajo = capta hasta una viñeta nueva; más alto = solo cambios grandes)
+      <input id="sens" type="range" min="1" max="30">
     </label>
-    <label>Tiempo quieta antes de disparar: <span id="quietoTxt"></span> s
-      <input id="quieto" type="range" min="0.3" max="3" step="0.1">
+    <label>Confirmación: <span id="confirmarTxt"></span> cuadros seguidos sin cambios para dar la transición por terminada
+      (súbelo si el profe usa transiciones animadas lentas)
+      <input id="confirmar" type="range" min="2" max="10" step="1">
     </label>
-    <label>Pausa mínima entre fotos automáticas: <span id="pausaTxt"></span> s
-      <input id="pausa" type="range" min="0" max="15" step="0.5">
+    <label>Pausa mínima entre fotos: <span id="pausaTxt"></span>
+      <input id="pausa" type="range" min="0" max="10" step="0.5">
     </label>
-    <label>Red de seguridad (revisa cambios pequeños) cada <span id="redTxt"></span>
+    <label>Red de seguridad (foto de control) cada <span id="redTxt"></span>
       <input id="red" type="range" min="0" max="120" step="5">
     </label>
     <label>Orientación de las fotos
@@ -138,25 +140,26 @@
 // ---------- parámetros fijos ----------
 const AW = 192, AH = 108;        // tamaño del cuadro de análisis
 const CELDA = 12;                // el cuadro se compara por celdas de 12×12 (16×9 celdas)
-const TICK_MS = 150;             // cada cuánto se analiza
+const TICK_MS = 100;             // cada cuánto se analiza un cuadro
 const TEXTURA_MIN = 8;           // desviación de gris para considerar que una celda tiene contenido (texto, imagen)
 const NCC_IGUAL = 0.5;           // correlación mínima para considerar que una celda muestra lo mismo
-const QUIETO = 0.03;             // fracción máx. de celdas cambiadas entre cuadros seguidos para considerar la imagen quieta
-const ESPERA_MAX_MS = 8000;      // si hay cambio pero nunca se queda quieta, dispara igual
 const MARGEN = 0.08;             // margen alrededor del recuadro al recortar
 const CALIDAD_JPEG = 0.9;
 const MISMA_DIAPOSITIVA = 0.6;   // al exportar: fracción de celdas con contenido que deben coincidir para ser la misma
 const ANCHO_PDF = 1600;          // ancho máximo en píxeles de cada diapositiva enderezada
 
 // ---------- configuración (se recuerda entre sesiones) ----------
-const cfg = { sens: 20, quieto: 0.6, pausa: 3, red: 15, recortar: true, quad: null, camara: '', giro: 'auto', voltear: false,
+const cfg = { sens: 4, confirmar: 3, pausa: 0, red: 0, recortar: true, quad: null, camara: '', giro: 'auto', voltear: false,
               bloqueo: false, filtro: 'mejorado', ocr: true };
 try {
-  const guardada = localStorage.getItem('cfg3');
+  const guardada = localStorage.getItem('cfg4');
   if (guardada) Object.assign(cfg, JSON.parse(guardada));
-  else Object.assign(cfg, JSON.parse(localStorage.getItem('cfg2') || '{}'), { giro: 'auto', red: 15 });   // versión anterior
+  else {   // versión anterior: se conservan zona, cámara y preferencias; la detección cambió de lógica y vuelve a sus valores
+    const { quad, camara, giro, voltear, bloqueo, filtro, ocr, recortar } = JSON.parse(localStorage.getItem('cfg3') || '{}');
+    for (const [k, v] of Object.entries({ quad, camara, giro, voltear, bloqueo, filtro, ocr, recortar })) if (v !== undefined) cfg[k] = v;
+  }
 } catch (e) {}
-function guardarCfg() { try { localStorage.setItem('cfg3', JSON.stringify(cfg)); } catch (e) {} }
+function guardarCfg() { try { localStorage.setItem('cfg4', JSON.stringify(cfg)); } catch (e) {} }
 
 const $ = id => document.getElementById(id);
 const video = $('video'), visor = $('visor'), marco = $('marco');
@@ -169,7 +172,10 @@ const ultima = Object.assign(document.createElement('img'), { id: 'ultima', alt:
 visor.after(ultima);
 
 let activo = false, ocupado = false, timer = null, wakeLock = null, pista = null, marcando = false;
-let ref = null, prev = null, quietoDesde = 0, cambioDesde = 0, ultimaCaptura = 0, ultimaRevision = 0, total = 0;
+let ref = null, prev = null, ultimaCaptura = 0, ultimaRevision = 0, total = 0;
+// detección por evento: por cada celda, cuántos cuadros seguidos lleva sin cambiar
+const NCELDAS = (AW / CELDA) * (AH / CELDA);
+let estables = new Uint16Array(NCELDAS), maxNuevas = 0, asentado = 0;
 
 // ---------- almacenamiento (IndexedDB) ----------
 const dbp = new Promise((ok, err) => {
@@ -295,32 +301,49 @@ function esVersionPrevia(a, b) {
 }
 const fraccionCambiada = (a, b) => comparar(a, b).cambio;
 
+// Detección por evento, sin relojes: una celda tiene "contenido nuevo" cuando es distinta de la última foto
+// y además ya se quedó fija (lleva cfg.confirmar cuadros sin cambiar). Así:
+//  - un cambio de diapositiva (o una viñeta que aparece) es un salto que luego se queda quieto: cuenta;
+//  - el profe caminando o gesticulando sigue cambiando: no cuenta, aunque esté encima de la pantalla.
+// Se dispara cuando el contenido nuevo supera la sensibilidad y deja de crecer (la transición terminó).
 function tick() {
   if (!activo || ocupado || marcando || video.readyState < 2) return;
   const cur = cuadroGris();
   const ahora = Date.now();
-  if (!ref) { prev = cur; quietoDesde = ahora; capturar('auto', cur); return; }
+  if (!ref) { prev = cur; ref = cur.slice(); estables.fill(0); maxNuevas = asentado = 0; capturar('auto', cur); return; }
 
-  const movimiento = fraccionCambiada(cur, prev);
-  const cambio = fraccionCambiada(cur, ref);
+  const n = cfg.confirmar;
+  celdas(cur, prev).forEach((c, i) => { estables[i] = c.igual ? Math.min(estables[i] + 1, 60000) : 0; });
   prev = cur;
-  if (movimiento >= QUIETO) quietoDesde = ahora;
-  const quieta = ahora - quietoDesde >= cfg.quieto * 1000;
-  const sens = cfg.sens / 100;
+  let nuevas = 0, moviendo = 0;
+  celdas(cur, ref).forEach((c, i) => { if (estables[i] < n) moviendo++; else if (!c.igual) nuevas++; });
 
-  if (cambio > sens) {
-    if (!cambioDesde) cambioDesde = ahora;
+  if (nuevas >= Math.max(1, Math.round(cfg.sens / 100 * NCELDAS))) {
+    if (nuevas > maxNuevas) { maxNuevas = nuevas; asentado = 0; } else asentado++;
     const pausaOk = ahora - ultimaCaptura >= cfg.pausa * 1000;
-    if (pausaOk && (quieta || ahora - cambioDesde > ESPERA_MAX_MS)) capturar('auto', cur);
-    else estado(`cambio ${Math.round(cambio * 100)}%…`);
+    // cada celda ya pasó su confirmación; basta con que el total deje de crecer un cuadro
+    if (asentado >= 1 && pausaOk) capturar('auto', cur);
+    else estado(`cambio ${Math.round(nuevas / NCELDAS * 100)}%…`);
   } else {
-    cambioDesde = 0;
-    if (cfg.red > 0 && quieta && ahora - ultimaRevision > cfg.red * 1000) {
-      if (cambio > sens / 5) capturar('red', cur);
+    maxNuevas = asentado = 0;
+    if (cfg.red > 0 && ahora - ultimaRevision > cfg.red * 1000) {   // foto de control opcional
+      if (moviendo === 0 && nuevas > 0) capturar('red', cur);
       else ultimaRevision = ahora;
     }
-    estado(`vigilando · ${Math.round(cambio * 100)}%`);
+    estado(`vigilando · movimiento ${Math.round(moviendo / NCELDAS * 100)}%`);
   }
+}
+
+// Tras una foto, la referencia se actualiza solo en las celdas fijas; donde algo se movía (el profe) se conserva
+// lo de antes, para que cuando se aparte no parezca que la diapositiva cambió.
+function actualizarRef(cur) {
+  const n = cfg.confirmar, porFila = AW / CELDA;
+  for (let i = 0; i < NCELDAS; i++) {
+    if (estables[i] < n) continue;
+    const cx = (i % porFila) * CELDA, cy = Math.floor(i / porFila) * CELDA;
+    for (let y = cy; y < cy + CELDA; y++) for (let x = cx, j = y * AW + cx; x < cx + CELDA; x++, j++) ref[j] = cur[j];
+  }
+  maxNuevas = asentado = 0;
 }
 
 // ---------- captura ----------
@@ -344,8 +367,8 @@ async function capturar(tipo, gris) {
     const girar = ([u, v]) => g === 90 ? [1 - v, u] : g === 180 ? [1 - u, 1 - v] : g === 270 ? [v, 1 - u] : [u, v];
     const esq = cfg.quad && cfg.quad.map(p => girar([(p[0] * W - z.x) / z.w, (p[1] * H - z.y) / z.h]));
     await guardar({ t: Date.now(), tipo, blob, esq });
-    ref = gris || cuadroGris();
-    cambioDesde = 0; ultimaCaptura = ultimaRevision = Date.now();
+    if (gris && ref) actualizarRef(gris); else ref = (gris || cuadroGris()).slice();
+    ultimaCaptura = ultimaRevision = Date.now();
     total++; $('contador').textContent = total;
     if (ultima.src) URL.revokeObjectURL(ultima.src);
     ultima.src = URL.createObjectURL(blob); ultima.style.display = 'block';
@@ -462,7 +485,7 @@ async function iniciar() {
     await pedirSensorMovimiento();   // en iPhone debe pedirse al tocar un botón
     const res = await abrirCamara();
     await pedirWakeLock();
-    activo = true; ref = prev = null; cambioDesde = 0;
+    activo = true; ref = prev = null;
     timer = setInterval(tick, TICK_MS);
     $('btnIniciar').textContent = 'Detener';
     $('btnManual').disabled = $('btnMarco').disabled = false;
@@ -988,9 +1011,9 @@ ultima.onclick = () => ultima.classList.toggle('grande');
 // controles de configuración: [id, clave en cfg, cómo mostrar el valor]
 const controles = [
   ['sens', 'sens', v => v],
-  ['quieto', 'quieto', v => (+v).toFixed(1)],
-  ['pausa', 'pausa', v => v],
-  ['red', 'red', v => +v ? v + ' s' : '— (apagada)'],
+  ['confirmar', 'confirmar', v => v],
+  ['pausa', 'pausa', v => +v ? v + ' s' : 'ninguna'],
+  ['red', 'red', v => +v ? v + ' s' : '— (apagada; ya no suele hacer falta)'],
 ];
 for (const [id, clave, txt] of controles) {
   $(id).value = cfg[clave]; $(id + 'Txt').textContent = txt(cfg[clave]);

@@ -277,6 +277,7 @@
     <div class="fila"><button class="accion" id="btnExportar">Exportar ZIP con las fotos originales</button></div>
     <div class="fila"><button class="accion peligro" id="btnBorrar">Borrar todas las fotos</button></div>
   </div>
+  <div class="grupo-t" style="text-align:center;text-transform:none">Versión 3 · comparador en segundo plano</div>
 </div>
 
 <div id="documento" hidden>
@@ -1159,28 +1160,59 @@ function armarPdf(paginas, nombre) {
 // de puntos que encajan; diapositivas distintas con la misma plantilla, 0,10 o menos.
 const URL_OPENCV = 'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js';
 const MISMOS_PUNTOS = 0.17;
-let promesaCv = null;
-// No se espera el aviso «listo» de OpenCV: en el iPhone a veces llega antes de que lo escuchemos y la espera
-// no terminaba nunca. Se revisa cada 200 ms si ya está listo, con un límite: si no, se sigue sin él.
-function cargarOpenCV() {
-  if (!promesaCv) promesaCv = (async () => {
-    const limite = Date.now() + 45000;
-    const listo = () => { const c = window.cvListo || window.cv; return c && c.Mat && c.ORB ? c : null; };
-    if (!listo()) await Promise.race([cargarScript(URL_OPENCV),
-      new Promise((_, err) => setTimeout(() => err(new Error('la descarga tardó demasiado')), 45000))]);
-    const c = window.cv;
-    if (c && !c.Mat && typeof c.then === 'function') c.then(m => { window.cvListo = m; });   // versión que entrega una promesa
-    while (!listo()) {
-      if (Date.now() > limite) throw new Error('el comparador no arrancó');
-      await new Promise(r => setTimeout(r, 200));
-    }
-    return listo();
-  })().catch(e => { promesaCv = null; throw e; });
-  return promesaCv;
+// OpenCV pesa unos 10 MB y en el iPhone, al arrancar, congelaba la página entera (ni los límites de tiempo
+// alcanzaban a correr). Por eso vive en un proceso aparte (worker): la página sigue respondiendo y, si el
+// comparador no arranca o deja de contestar a tiempo, se descarta y se sigue con el método simple.
+let trabajadorCv = null;
+function iniciarComparador() {
+  const codigo = `
+    let cv = null; const fichas = [];
+    ${puntosDe.toString()}
+    ${mismosPuntos.toString()}
+    try { importScripts('${URL_OPENCV}'); } catch (e) { postMessage({ error: 'no se pudo descargar' }); }
+    const listo = () => { const c = self.cvListo || self.cv; return c && c.Mat && c.ORB ? c : null; };
+    if (self.cv && !self.cv.Mat && typeof self.cv.then === 'function') self.cv.then(m => { self.cvListo = m; });
+    (function esperar() { cv = listo(); if (cv) postMessage({ listo: true }); else setTimeout(esperar, 200); })();
+    onmessage = ({ data: m }) => {
+      try {
+        if (m.tipo === 'puntos') { fichas[m.i] = puntosDe(cv, m.img); postMessage({ id: m.id, r: fichas[m.i].n }); }
+        else postMessage({ id: m.id, r: mismosPuntos(cv, fichas[m.a], fichas[m.b]) });
+      } catch (e) { postMessage({ id: m.id, error: String(e && e.message || e) }); }
+    };`;
+  return new Promise(ok => {
+    let w;
+    try { w = new Worker(URL.createObjectURL(new Blob([codigo], { type: 'text/javascript' }))); }
+    catch (e) { ok(null); return; }
+    const pendientes = new Map();
+    let n = 0, muerto = false;
+    const morir = () => { muerto = true; w.terminate(); pendientes.forEach(f => f(null)); pendientes.clear(); };
+    const espera = setTimeout(() => { morir(); ok(null); }, 90000);
+    w.onerror = () => { clearTimeout(espera); morir(); ok(null); };
+    w.onmessage = ({ data: m }) => {
+      if (m.listo) { clearTimeout(espera); ok(api); return; }
+      if (m.error && m.id === undefined) { clearTimeout(espera); morir(); ok(null); return; }
+      const f = pendientes.get(m.id);
+      if (f) { pendientes.delete(m.id); f(m.error ? null : m.r); }
+    };
+    // cada pedido tiene 20 s; si no contesta, el comparador se apaga y el resto usa el método simple
+    const pedir = (msg, transferir) => new Promise(f => {
+      if (muerto) { f(null); return; }
+      const id = n++, t = setTimeout(() => { if (pendientes.has(id)) { pendientes.delete(id); f(null); morir(); } }, 20000);
+      pendientes.set(id, r => { clearTimeout(t); f(r); });
+      w.postMessage({ ...msg, id }, transferir || []);
+    });
+    const api = {
+      vivo: () => !muerto,
+      puntos: (i, img) => pedir({ tipo: 'puntos', i, img }, [img.data.buffer]),
+      parecido: (a, b) => pedir({ tipo: 'misma', a, b }),
+      cerrar: () => { if (!muerto) morir(); },
+    };
+    trabajadorCv = api;
+  });
 }
-// Puntos ORB de un lienzo, guardados como arreglos simples (los objetos de OpenCV se liberan enseguida)
-function puntosDe(cv, lienzo) {
-  const img = cv.imread(lienzo), gris = new cv.Mat();
+// Puntos ORB de una imagen (ImageData), guardados como arreglos simples (los objetos de OpenCV se liberan enseguida)
+function puntosDe(cv, datos) {
+  const img = cv.matFromImageData(datos), gris = new cv.Mat();
   cv.cvtColor(img, gris, cv.COLOR_RGBA2GRAY);
   const orb = new cv.ORB(800), kp = new cv.KeyPointVector(), des = new cv.Mat(), vacia = new cv.Mat();
   orb.detectAndCompute(gris, vacia, kp, des);
@@ -1229,9 +1261,10 @@ async function exportarPdf() {
   preparando = true;
   try {
     // 1) de cada foto ya enderezada: huella pequeña y puntos característicos, para compararlas
-    let cv = null;
-    info('Cargando el comparador de diapositivas (la primera vez descarga unos 10 MB)…');
-    try { cv = await cargarOpenCV(); } catch (e) { info('No cargó el comparador (' + e.message + '): se usa el método simple.'); await new Promise(r => setTimeout(r, 1500)); }
+    info('Versión 3 · Cargando el comparador de diapositivas (la primera vez descarga unos 10 MB; puede tardar hasta 1 min)…');
+    if (trabajadorCv) trabajadorCv.cerrar();
+    const cv = await iniciarComparador();
+    if (!cv) { info('No cargó el comparador: se usa el método simple.'); await new Promise(r => setTimeout(r, 1500)); }
     const fichas = [];
     let t0 = null;
     for (let i = 0; i < ks.length; i++) {
@@ -1244,21 +1277,25 @@ async function exportarPdf() {
       const c = enderezar(bm, reg.esq, 960, 640, lienzoHuella);
       bm.close();
       const huella = grisDe(c, 0, 0, c.width, c.height);
-      fichas.push({ clave: ks[i], huella, nitidez: nitidez(huella), esq: reg.esq, puntos: cv ? puntosDe(cv, c) : null });
+      let puntos = false;
+      if (cv && cv.vivo()) puntos = (await cv.puntos(i, c.getContext('2d').getImageData(0, 0, c.width, c.height))) !== null;
+      fichas.push({ clave: ks[i], huella, nitidez: nitidez(huella), esq: reg.esq, puntos });
     }
     // 2) agrupar las seguidas que muestran la misma diapositiva
     // casi idénticas se reconocen al instante; si no, deciden los puntos característicos (o, sin ellos, las celdas)
-    const misma = (a, b) => {
+    const misma = async (a, b) => {
       const p = compararAlineado(fichas[a].huella, fichas[b].huella).parecido;
-      if (p >= 0.85 || !cv) return p >= MISMA_DIAPOSITIVA;
-      return mismosPuntos(cv, fichas[a].puntos, fichas[b].puntos) >= MISMOS_PUNTOS;
+      if (p >= 0.85 || !cv || !cv.vivo() || !fichas[a].puntos || !fichas[b].puntos) return p >= MISMA_DIAPOSITIVA;
+      const r = await cv.parecido(a, b);
+      return r === null ? p >= MISMA_DIAPOSITIVA : r >= MISMOS_PUNTOS;
     };
+    const algunaMisma = async (k, lista) => { for (const j of lista) if (await misma(k, j)) return true; return false; };
     const respirar = () => new Promise(r => setTimeout(r));   // deja que la pantalla se actualice
     const grupos = [[0]];
     for (let k = 1; k < fichas.length; k++) {
       if (k % 5 === 0) { info(`Comparando fotos… ${k}/${fichas.length}`); await respirar(); }
       const g = grupos[grupos.length - 1];
-      if (g.slice(-3).some(j => misma(k, j))) g.push(k);
+      if (await algunaMisma(k, g.slice(-3))) g.push(k);
       else grupos.push([k]);
     }
     // 3) si el profe vuelve a una diapositiva anterior, no repetirla
@@ -1267,7 +1304,8 @@ async function exportarPdf() {
       info(`Buscando diapositivas repetidas… ${n + 1}/${grupos.length}`);
       await respirar();
       const g = grupos[n], rep = elegir(g, fichas);
-      const igual = paginas.find(p => misma(rep, p.rep));   // contra la mejor foto de cada diapositiva anterior
+      let igual = null;   // contra la mejor foto de cada diapositiva anterior
+      for (const p of paginas) if (await misma(rep, p.rep)) { igual = p; break; }
       if (igual) igual.miembros.push(...g);
       else paginas.push({ miembros: [...g], rep });
     }
@@ -1281,6 +1319,7 @@ async function exportarPdf() {
       paginas.splice(i, 1);
       await respirar();
     }
+    if (cv) cv.cerrar();   // ya no hace falta: libera la memoria del comparador
     // 5) cada diapositiva enderezada, combinando fotos para borrar a quien la tapaba
     const listas = [];
     for (let n = 0; n < paginas.length; n++) {

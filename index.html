@@ -1160,14 +1160,22 @@ function armarPdf(paginas, nombre) {
 const URL_OPENCV = 'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js';
 const MISMOS_PUNTOS = 0.17;
 let promesaCv = null;
+// No se espera el aviso «listo» de OpenCV: en el iPhone a veces llega antes de que lo escuchemos y la espera
+// no terminaba nunca. Se revisa cada 200 ms si ya está listo, con un límite: si no, se sigue sin él.
 function cargarOpenCV() {
   if (!promesaCv) promesaCv = (async () => {
-    if (!window.cv || !window.cv.Mat) await cargarScript(URL_OPENCV);
-    let c = window.cv;
-    if (c instanceof Promise) c = await c;
-    else if (!c.Mat) await new Promise(ok => { c.onRuntimeInitialized = ok; });
-    return c;
-  })();
+    const limite = Date.now() + 45000;
+    const listo = () => { const c = window.cvListo || window.cv; return c && c.Mat && c.ORB ? c : null; };
+    if (!listo()) await Promise.race([cargarScript(URL_OPENCV),
+      new Promise((_, err) => setTimeout(() => err(new Error('la descarga tardó demasiado')), 45000))]);
+    const c = window.cv;
+    if (c && !c.Mat && typeof c.then === 'function') c.then(m => { window.cvListo = m; });   // versión que entrega una promesa
+    while (!listo()) {
+      if (Date.now() > limite) throw new Error('el comparador no arrancó');
+      await new Promise(r => setTimeout(r, 200));
+    }
+    return listo();
+  })().catch(e => { promesaCv = null; throw e; });
   return promesaCv;
 }
 // Puntos ORB de un lienzo, guardados como arreglos simples (los objetos de OpenCV se liberan enseguida)
@@ -1223,7 +1231,7 @@ async function exportarPdf() {
     // 1) de cada foto ya enderezada: huella pequeña y puntos característicos, para compararlas
     let cv = null;
     info('Cargando el comparador de diapositivas (la primera vez descarga unos 10 MB)…');
-    try { cv = await cargarOpenCV(); } catch (e) { info('Sin conexión: se compara con el método simple.'); }
+    try { cv = await cargarOpenCV(); } catch (e) { info('No cargó el comparador (' + e.message + '): se usa el método simple.'); await new Promise(r => setTimeout(r, 1500)); }
     const fichas = [];
     let t0 = null;
     for (let i = 0; i < ks.length; i++) {

@@ -87,7 +87,7 @@
     <label>Cámara
       <select id="camara"></select>
     </label>
-    <label>Sensibilidad: dispara cuando aparece contenido nuevo en al menos el <span id="sensTxt"></span>% de la zona
+    <label>Sensibilidad: dispara cuando cambia de golpe al menos el <span id="sensTxt"></span>% de la zona
       (más bajo = capta hasta una viñeta nueva; más alto = solo cambios grandes)
       <input id="sens" type="range" min="1" max="30">
     </label>
@@ -149,17 +149,18 @@ const MISMA_DIAPOSITIVA = 0.6;   // al exportar: fracción de celdas con conteni
 const ANCHO_PDF = 1600;          // ancho máximo en píxeles de cada diapositiva enderezada
 
 // ---------- configuración (se recuerda entre sesiones) ----------
-const cfg = { sens: 4, confirmar: 3, pausa: 0, red: 0, recortar: true, quad: null, camara: '', giro: 'auto', voltear: false,
+const cfg = { sens: 3, confirmar: 3, pausa: 0, red: 0, recortar: true, quad: null, camara: '', giro: 'auto', voltear: false,
               bloqueo: false, filtro: 'mejorado', ocr: true };
 try {
-  const guardada = localStorage.getItem('cfg4');
+  const guardada = localStorage.getItem('cfg5');
   if (guardada) Object.assign(cfg, JSON.parse(guardada));
   else {   // versión anterior: se conservan zona, cámara y preferencias; la detección cambió de lógica y vuelve a sus valores
-    const { quad, camara, giro, voltear, bloqueo, filtro, ocr, recortar } = JSON.parse(localStorage.getItem('cfg3') || '{}');
-    for (const [k, v] of Object.entries({ quad, camara, giro, voltear, bloqueo, filtro, ocr, recortar })) if (v !== undefined) cfg[k] = v;
+    const anterior = localStorage.getItem('cfg4') || localStorage.getItem('cfg3') || '{}';
+    const { quad, camara, voltear, bloqueo, filtro, ocr, recortar } = JSON.parse(anterior);
+    for (const [k, v] of Object.entries({ quad, camara, voltear, bloqueo, filtro, ocr, recortar })) if (v !== undefined) cfg[k] = v;
   }
 } catch (e) {}
-function guardarCfg() { try { localStorage.setItem('cfg4', JSON.stringify(cfg)); } catch (e) {} }
+function guardarCfg() { try { localStorage.setItem('cfg5', JSON.stringify(cfg)); } catch (e) {} }
 
 const $ = id => document.getElementById(id);
 const video = $('video'), visor = $('visor'), marco = $('marco');
@@ -252,9 +253,15 @@ function finMarcado() {
 function grisDe(fuente, x, y, w, h) {
   ctxA.drawImage(fuente, x, y, w, h, 0, 0, AW, AH);
   const d = ctxA.getImageData(0, 0, AW, AH).data;
-  const g = new Float32Array(AW * AH);
+  const g = new Float32Array(AW * AH), s = new Float32Array(AW * AH);
   for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-  return g;
+  for (let y = 0; y < AH; y++) for (let x = 0; x < AW; x++) {   // suavizado 3×3
+    let t = 0, n = 0;
+    for (let yy = Math.max(0, y - 1); yy <= Math.min(AH - 1, y + 1); yy++)
+      for (let xx = Math.max(0, x - 1); xx <= Math.min(AW - 1, x + 1); xx++) { t += g[yy * AW + xx]; n++; }
+    s[y * AW + x] = t / n;
+  }
+  return s;
 }
 function cuadroGris() {
   const z = zona(0);
@@ -264,7 +271,7 @@ function cuadroGris() {
 // (correlación baja); así un cambio de brillo o de exposición de la cámara no cuenta como cambio.
 // Una celda lisa solo cambió si su brillo se movió mucho más que el del cuadro completo.
 // celdas(): para cada celda, si tiene contenido en a (ca) y en b (cb) y si muestra lo mismo en ambas (igual)
-function celdas(a, b) {
+function celdas(a, b, fuera) {
   const n = CELDA * CELDA, res = [];
   let ma = 0, mb = 0;
   for (let i = 0; i < a.length; i++) { ma += a[i]; mb += b[i]; }
@@ -281,19 +288,21 @@ function celdas(a, b) {
     if (Math.max(da, db) < TEXTURA_MIN) igual = dm <= 25;
     else if (Math.min(da, db) < 2) igual = false;
     else igual = (sab / n - (sa / n) * (sb / n)) / (da * db) >= NCC_IGUAL && dm <= 40;
-    res.push({ ca: da >= TEXTURA_MIN, cb: db >= TEXTURA_MIN, igual });
+    const sinDatos = !!(fuera && fuera[res.length]);   // celda que quedó fuera del cuadro al alinear: no se compara
+    res.push({ ca: da >= TEXTURA_MIN && !sinDatos, cb: db >= TEXTURA_MIN && !sinDatos, igual: igual || sinDatos, sinDatos });
   }
   return res;
 }
-function comparar(a, b) {
-  const cs = celdas(a, b);
+function comparar(a, b, fuera) {
+  const cs = celdas(a, b, fuera);
   const cambiadas = cs.filter(c => !c.igual).length;
   const contenido = cs.filter(c => c.ca || c.cb || !c.igual).length;   // las lisas e iguales no aportan
-  return { cambio: cambiadas / cs.length, parecido: contenido ? 1 - cambiadas / contenido : 1 };
+  return { cambio: cambiadas / cs.length, parecido: contenido ? 1 - cambiadas / contenido : 1, contenido };
 }
 // ¿a es una versión incompleta de b? (diapositiva cuyas viñetas o imágenes van apareciendo)
 function esVersionPrevia(a, b) {
-  const cs = celdas(a, b), conA = cs.filter(c => c.ca);
+  const al = alinear(a, ...desplazamiento(b, a));
+  const cs = celdas(al.g, b, al.fuera), conA = cs.filter(c => c.ca);
   if (conA.length < 3) return false;
   const mantenidas = conA.filter(c => c.igual).length / conA.length;
   const nuevas = cs.filter(c => !c.ca && c.cb && !c.igual).length;
@@ -301,27 +310,122 @@ function esVersionPrevia(a, b) {
 }
 const fraccionCambiada = (a, b) => comparar(a, b).cambio;
 
-// Detección por evento, sin relojes: una celda tiene "contenido nuevo" cuando es distinta de la última foto
-// y además ya se quedó fija (lleva cfg.confirmar cuadros sin cambiar). Así:
-//  - un cambio de diapositiva (o una viñeta que aparece) es un salto que luego se queda quieto: cuenta;
-//  - el profe caminando o gesticulando sigue cambiando: no cuenta, aunque esté encima de la pantalla.
-// Se dispara cuando el contenido nuevo supera la sensibilidad y deja de crecer (la transición terminó).
+// ---------- compensación de movimiento de la cámara ----------
+// La cámara nunca está del todo quieta (pulso, mesa que vibra): unos píxeles de corrimiento harían que toda
+// la pantalla parezca cambiar. Antes de comparar dos cuadros se busca el corrimiento que mejor los alinea.
+const DESPL_MAX = 8;   // corrimiento máximo compensado, en píxeles del cuadro de análisis (≈4 % del ancho)
+function reducir(g) {
+  const w = AW / 2, h = AH / 2, r = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = 2 * y * AW + 2 * x;
+    r[y * w + x] = (g[i] + g[i + 1] + g[i + AW] + g[i + AW + 1]) / 4;
+  }
+  return r;
+}
+function diferencia(a, b, w, h, dx, dy, borde, paso) {   // a(x,y) contra b(x+dx, y+dy), en la parte central
+  let s = 0, n = 0;
+  for (let y = borde; y < h - borde; y += paso) for (let x = borde, i = y * w + x, j = (y + dy) * w + x + dx; x < w - borde; x += paso, i += paso, j += paso) {
+    s += Math.abs(a[i] - b[j]); n++;
+  }
+  return s / n;
+}
+// Corrimiento (dx, dy) tal que a(x, y) ≈ b(x + dx, y + dy)
+function desplazamiento(a, b) {
+  const ra = reducir(a), rb = reducir(b), R = DESPL_MAX / 2, w = AW / 2, h = AH / 2;
+  let mejor = [0, 0], minimo = Infinity;
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+    const v = diferencia(ra, rb, w, h, dx, dy, R + 1, 1);
+    if (v < minimo) { minimo = v; mejor = [dx, dy]; }
+  }
+  const borde = DESPL_MAX + 1, cero = diferencia(a, b, AW, AH, 0, 0, borde, 2);
+  let fino = [0, 0], minFino = Infinity;
+  for (let dy = 2 * mejor[1] - 1; dy <= 2 * mejor[1] + 1; dy++) for (let dx = 2 * mejor[0] - 1; dx <= 2 * mejor[0] + 1; dx++) {
+    if (Math.abs(dx) > DESPL_MAX || Math.abs(dy) > DESPL_MAX) continue;
+    const v = diferencia(a, b, AW, AH, dx, dy, borde, 2);
+    if (v < minFino) { minFino = v; fino = [dx, dy]; }
+  }
+  return cero <= minFino * 1.03 ? [0, 0] : fino;   // si no moverse es casi igual de bueno, no moverse
+}
+// b corrido (dx, dy) para que quede encima de a; `fuera` marca las celdas que quedaron sin datos en el borde
+function alinear(b, dx, dy) {
+  if (!dx && !dy) return { g: b, fuera: null };
+  const g = new Float32Array(b.length);
+  for (let y = 0; y < AH; y++) {
+    const ys = Math.min(AH - 1, Math.max(0, y + dy));
+    for (let x = 0; x < AW; x++) g[y * AW + x] = b[ys * AW + Math.min(AW - 1, Math.max(0, x + dx))];
+  }
+  const fuera = new Uint8Array(NCELDAS), porFila = AW / CELDA;
+  for (let i = 0; i < NCELDAS; i++) {
+    const cx = (i % porFila) * CELDA, cy = Math.floor(i / porFila) * CELDA;
+    fuera[i] = cx + dx < 0 || cx + CELDA + dx > AW || cy + dy < 0 || cy + CELDA + dy > AH ? 1 : 0;
+  }
+  return { g, fuera };
+}
+const compararAlineado = (a, b) => { const al = alinear(b, ...desplazamiento(a, b)); return comparar(a, al.g, al.fuera); };
+// ---------- detección por evento ----------
+// Sin relojes. Por cada celda se lleva cuántos cuadros seguidos lleva sin cambiar (ya compensado el
+// movimiento de la cámara) y en qué cuadro empezó su último cambio después de haber estado quieta.
+// Una celda tiene "contenido nuevo" si es distinta de la última foto y ya se volvió a quedar fija.
+//  - Pasar la diapositiva (o que aparezca una viñeta) hace saltar muchas celdas en el mismo instante.
+//  - El profe moviéndose las cambia de a pocas, en momentos distintos, y mientras se mueve no están fijas.
+// Por eso cuentan las celdas nuevas que empezaron a cambiar juntas, dentro de una ventana corta (lo que dura
+// una transición). Además, donde hubo movimiento repetido hace poco (el profe) y hasta 2 celdas alrededor
+// (brazos, manos) no cuenta nada durante unos segundos: quedarse quieto un momento entre gesto y gesto no
+// parece un cambio de diapositiva. Se dispara cuando el grupo supera la sensibilidad y deja de crecer.
+// Respaldo lento: si fuera de esa zona una parte de la pantalla quedó distinta y fija varios segundos
+// (p. ej. la diapositiva cambió detrás del profe y se ve cuando se aparta), también se toma la foto.
+const VENTANA = 8;        // cuadros: celdas que empezaron a cambiar con esta diferencia cuentan como el mismo salto
+const QUIETA_ANTES = 5;   // cuadros que una celda debe llevar fija para que su cambio cuente como salto
+const OLVIDO = 0.97;      // la actividad de cada celda se va olvidando (≈ a la mitad en 2,3 s)
+const ACTIVIDAD_MAX = 3;  // por encima de esto hubo movimiento repetido: zona del profe (un cambio de corte no llega)
+const RADIO_ZONA = 2;     // celdas alrededor del movimiento que también se ignoran
+const LENTO = 30;         // cuadros fija (≈3 s) para el respaldo lento
+let inicio = new Int32Array(NCELDAS).fill(-1), nCuadro = 0, actividad = new Float32Array(NCELDAS);
+function enZonaDeMovimiento(i) {
+  const porFila = AW / CELDA, filas = AH / CELDA, cx = i % porFila, cy = Math.floor(i / porFila);
+  for (let y = Math.max(0, cy - RADIO_ZONA); y <= Math.min(filas - 1, cy + RADIO_ZONA); y++)
+    for (let x = Math.max(0, cx - RADIO_ZONA); x <= Math.min(porFila - 1, cx + RADIO_ZONA); x++) if (actividad[y * porFila + x] > ACTIVIDAD_MAX) return true;
+  return false;
+}
 function tick() {
   if (!activo || ocupado || marcando || video.readyState < 2) return;
   const cur = cuadroGris();
   const ahora = Date.now();
-  if (!ref) { prev = cur; ref = cur.slice(); estables.fill(0); maxNuevas = asentado = 0; capturar('auto', cur); return; }
-
+  if (!ref) {
+    prev = cur; ref = cur.slice(); estables.fill(0); inicio.fill(-1); actividad.fill(0); maxNuevas = asentado = 0;
+    capturar('auto', cur); return;
+  }
+  nCuadro++;
   const n = cfg.confirmar;
-  celdas(cur, prev).forEach((c, i) => { estables[i] = c.igual ? Math.min(estables[i] + 1, 60000) : 0; });
+  const ap = alinear(prev, ...desplazamiento(cur, prev));
+  celdas(cur, ap.g, ap.fuera).forEach((c, i) => {
+    actividad[i] = actividad[i] * OLVIDO + (c.igual ? 0 : 1);
+    if (c.igual) estables[i] = Math.min(estables[i] + 1, 60000);
+    else { if (estables[i] >= QUIETA_ANTES) inicio[i] = nCuadro; estables[i] = 0; }
+  });
   prev = cur;
-  let nuevas = 0, moviendo = 0;
-  celdas(cur, ref).forEach((c, i) => { if (estables[i] < n) moviendo++; else if (!c.igual) nuevas++; });
+  const ar = alinear(ref, ...desplazamiento(cur, ref));
+  const inicios = [];
+  let moviendo = 0, lentas = 0;
+  celdas(cur, ar.g, ar.fuera).forEach((c, i) => {
+    if (estables[i] < n) { moviendo++; return; }
+    if (c.igual || enZonaDeMovimiento(i)) return;
+    if (inicio[i] > 0) inicios.push(inicio[i]);
+    if (estables[i] >= LENTO) lentas++;
+  });
+  inicios.sort((a, b) => a - b);
+  let nuevas = 0;   // el grupo más grande de celdas nuevas que saltaron juntas
+  for (let j = 0, k = 0; k < inicios.length; k++) {
+    while (inicios[k] - inicios[j] > VENTANA) j++;
+    nuevas = Math.max(nuevas, k - j + 1);
+  }
 
-  if (nuevas >= Math.max(1, Math.round(cfg.sens / 100 * NCELDAS))) {
+  const minimo = Math.max(1, Math.round(cfg.sens / 100 * NCELDAS));
+  if (lentas >= 2 * minimo && ahora - ultimaCaptura >= cfg.pausa * 1000) { capturar('lento', cur); return; }
+  if (nuevas >= minimo) {
     if (nuevas > maxNuevas) { maxNuevas = nuevas; asentado = 0; } else asentado++;
     const pausaOk = ahora - ultimaCaptura >= cfg.pausa * 1000;
-    // cada celda ya pasó su confirmación; basta con que el total deje de crecer un cuadro
+    // cada celda ya pasó su confirmación; basta con que el grupo deje de crecer un cuadro
     if (asentado >= 1 && pausaOk) capturar('auto', cur);
     else estado(`cambio ${Math.round(nuevas / NCELDAS * 100)}%…`);
   } else {
@@ -334,15 +438,19 @@ function tick() {
   }
 }
 
-// Tras una foto, la referencia se actualiza solo en las celdas fijas; donde algo se movía (el profe) se conserva
-// lo de antes, para que cuando se aparte no parezca que la diapositiva cambió.
+// Tras una foto, la referencia pasa a ser el cuadro actual, salvo en las celdas donde algo se movía (el profe):
+// ahí se conserva lo de antes (corrido a la posición actual de la cámara), para que cuando se aparte
+// no parezca que la diapositiva cambió.
 function actualizarRef(cur) {
   const n = cfg.confirmar, porFila = AW / CELDA;
+  const vieja = alinear(ref, ...desplazamiento(cur, ref)).g;
+  const nueva = cur.slice();
   for (let i = 0; i < NCELDAS; i++) {
-    if (estables[i] < n) continue;
+    if (estables[i] >= n) continue;
     const cx = (i % porFila) * CELDA, cy = Math.floor(i / porFila) * CELDA;
-    for (let y = cy; y < cy + CELDA; y++) for (let x = cx, j = y * AW + cx; x < cx + CELDA; x++, j++) ref[j] = cur[j];
+    for (let y = cy; y < cy + CELDA; y++) for (let x = cx, j = y * AW + cx; x < cx + CELDA; x++, j++) nueva[j] = vieja[j];
   }
+  ref = nueva;
   maxNuevas = asentado = 0;
 }
 
@@ -401,7 +509,7 @@ function giroActual(z) {
   let g;
   if (cfg.giro !== 'auto') g = +cfg.giro;
   else if (alto <= ancho) g = 0;   // ya está horizontal
-  else if (gravedad && Math.abs(gravedad.x) > Math.abs(gravedad.y) + 2) g = gravedad.x > 0 ? 270 : 90;
+  else if (gravedad && Math.abs(gravedad.x) > Math.abs(gravedad.y) + 2) g = gravedad.x > 0 ? 90 : 270;
   else g = 270;
   return (g + (cfg.voltear ? 180 : 0)) % 360;
 }
@@ -612,18 +720,23 @@ function homografia(desde, hasta) {
   }
   return A.map((fila, i) => fila[8] / fila[i]);
 }
-// Devuelve un lienzo con la pantalla enderezada (o la foto completa si no hay esquinas)
-function enderezar(bitmap, esq, ladoFuente, anchoMax) {
+// Lienzos de trabajo reutilizados: Safari en iPhone tiene un límite de memoria total para lienzos y,
+// si se crea uno nuevo por foto, al rato deja de dibujar y la exportación se queda colgada.
+const lienzoFuente = document.createElement('canvas'), lienzoHuella = document.createElement('canvas');
+const lienzoPagina = document.createElement('canvas'), lienzoAux = document.createElement('canvas');
+const lienzoFiltro = document.createElement('canvas'), lienzoMini = document.createElement('canvas');
+// Dibuja en `destino` la pantalla enderezada (o la foto completa si no hay esquinas) y lo devuelve
+function enderezar(bitmap, esq, ladoFuente, anchoMax, destino) {
   const f = Math.min(1, ladoFuente / Math.max(bitmap.width, bitmap.height));
-  const sw = Math.round(bitmap.width * f), sh = Math.round(bitmap.height * f);
-  const fuente = document.createElement('canvas'); fuente.width = sw; fuente.height = sh;
-  const cf = fuente.getContext('2d', { willReadFrequently: true });
+  const sw = Math.max(2, Math.round(bitmap.width * f)), sh = Math.max(2, Math.round(bitmap.height * f));
+  lienzoFuente.width = sw; lienzoFuente.height = sh;
+  const cf = lienzoFuente.getContext('2d', { willReadFrequently: true });
   cf.drawImage(bitmap, 0, 0, sw, sh);
   if (!esq) {
-    if (sw <= anchoMax) return fuente;
-    const c = document.createElement('canvas'); c.width = anchoMax; c.height = Math.round(sh * anchoMax / sw);
-    c.getContext('2d').drawImage(fuente, 0, 0, c.width, c.height);
-    return c;
+    const e = Math.min(1, anchoMax / sw);
+    destino.width = Math.round(sw * e); destino.height = Math.round(sh * e);
+    destino.getContext('2d').drawImage(lienzoFuente, 0, 0, destino.width, destino.height);
+    return destino;
   }
   const q = ordenarEsquinas(esq.map(p => [p[0] * (sw - 1), p[1] * (sh - 1)]));
   const largo = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -633,8 +746,8 @@ function enderezar(bitmap, esq, ladoFuente, anchoMax) {
   const W = Math.max(2, Math.round(ancho * e)), H = Math.max(2, Math.round(alto * e));
   const h = homografia([[0, 0], [W - 1, 0], [W - 1, H - 1], [0, H - 1]], q);
   const src = cf.getImageData(0, 0, sw, sh).data;
-  const salida = document.createElement('canvas'); salida.width = W; salida.height = H;
-  const cs = salida.getContext('2d'), img = cs.createImageData(W, H), dst = img.data;
+  destino.width = W; destino.height = H;
+  const cs = destino.getContext('2d', { willReadFrequently: true }), img = cs.createImageData(W, H), dst = img.data;
   for (let y = 0, o = 0; y < H; y++) for (let x = 0; x < W; x++, o += 4) {
     const d = h[6] * x + h[7] * y + 1;
     const sx = Math.min(sw - 1.001, Math.max(0, (h[0] * x + h[1] * y + h[2]) / d));
@@ -646,7 +759,7 @@ function enderezar(bitmap, esq, ladoFuente, anchoMax) {
     dst[o + 3] = 255;
   }
   cs.putImageData(img, 0, 0);
-  return salida;
+  return destino;
 }
 // ---------- filtros tipo escáner ----------
 // Desenfoque de caja separable sobre un canal (Float32Array w×h), radio r
@@ -729,8 +842,11 @@ function nitidez(g) {   // varianza del laplaciano sobre el cuadro de análisis
 }
 // De un grupo de fotos de la misma diapositiva: la más parecida a la mediana (la menos tapada); si empatan, la más nítida.
 // `apoyo` son fotos que no se eligen pero ayudan a calcular la mediana (p. ej. la versión anterior sin todas las viñetas).
-function elegir(grupo, fichas, apoyo = []) {
+// Con muchas fotos se usa una muestra pareja de 15: la mediana sobre cientos tardaría minutos en un celular.
+const muestraPareja = (lista, max) => lista.length <= max ? lista : Array.from({ length: max }, (_, i) => lista[Math.floor(i * lista.length / max)]);
+function elegir(grupoCompleto, fichas, apoyoCompleto = []) {
   const masNitida = cand => cand.reduce((m, k) => fichas[k].nitidez > fichas[m].nitidez ? k : m);
+  const grupo = muestraPareja(grupoCompleto, 15), apoyo = muestraPareja(apoyoCompleto, 6);
   const todas = [...grupo, ...apoyo];
   if (todas.length < 3) return masNitida(grupo);
   const dif = grupo.map(() => 0), vals = new Float32Array(todas.length);
@@ -742,26 +858,27 @@ function elegir(grupo, fichas, apoyo = []) {
   const minimo = Math.min(...dif);
   return masNitida(grupo.filter((k, j) => dif[j] <= minimo + 1.5 * AW * AH));
 }
-async function enderezarFoto(clave) {
+async function enderezarFoto(clave, destino) {
   const reg = await leer(clave);
   const bm = await createImageBitmap(reg.blob);
-  const c = enderezar(bm, reg.esq, 4096, ANCHO_PDF);
+  const c = enderezar(bm, reg.esq, 4096, ANCHO_PDF, destino);
   bm.close();
   return c;
 }
 // Combina hasta 5 fotos de la misma diapositiva tomando la mediana de cada píxel: quien estuvo de pie
 // frente a la pantalla en alguna de ellas desaparece del resultado. Solo se combinan fotos con las mismas
-// esquinas marcadas (cámara en el mismo sitio), para que los píxeles coincidan.
+// esquinas marcadas y sin corrimiento de cámara entre ellas, para que los píxeles coincidan.
 const mismasEsquinas = (a, b) => a && b && a.every((p, i) => Math.abs(p[0] - b[i][0]) < 0.004 && Math.abs(p[1] - b[i][1]) < 0.004);
 async function componer(pagina, fichas) {
   const mejor = pagina.rep;
-  const alineadas = [mejor, ...pagina.miembros.filter(k => k !== mejor && mismasEsquinas(fichas[k].esq, fichas[mejor].esq))
+  const quieta = k => { const [dx, dy] = desplazamiento(fichas[mejor].huella, fichas[k].huella); return !dx && !dy; };
+  const alineadas = [mejor, ...pagina.miembros.filter(k => k !== mejor && mismasEsquinas(fichas[k].esq, fichas[mejor].esq) && quieta(k))
     .sort((a, b) => fichas[b].nitidez - fichas[a].nitidez)].slice(0, 5);
-  const base = await enderezarFoto(fichas[mejor].clave);
+  const base = await enderezarFoto(fichas[mejor].clave, lienzoPagina);
   if (alineadas.length < 3) return base;
   const W = base.width, H = base.height, capas = [base.getContext('2d').getImageData(0, 0, W, H).data];
   for (const k of alineadas.slice(1)) {
-    const c = await enderezarFoto(fichas[k].clave);
+    const c = await enderezarFoto(fichas[k].clave, lienzoAux);
     if (c.width === W && c.height === H) capas.push(c.getContext('2d').getImageData(0, 0, W, H).data);
   }
   if (capas.length < 3) return base;
@@ -844,6 +961,64 @@ function armarPdf(paginas, nombre) {
   return new File(partes, nombre, { type: 'application/pdf' });
 }
 
+// ---------- reconocer la misma diapositiva: puntos característicos (OpenCV) ----------
+// Al exportar, dos fotos son de la misma diapositiva si sus puntos característicos (esquinas y detalles del
+// dibujo o del texto) encajan con una sola transformación de perspectiva. Funciona aunque cambie el zoom,
+// se corra la cámara o el profe tape una parte. Medido en una clase real: la misma diapositiva da 0,23 o más
+// de puntos que encajan; diapositivas distintas con la misma plantilla, 0,10 o menos.
+const URL_OPENCV = 'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js';
+const MISMOS_PUNTOS = 0.17;
+let promesaCv = null;
+function cargarOpenCV() {
+  if (!promesaCv) promesaCv = (async () => {
+    if (!window.cv || !window.cv.Mat) await cargarScript(URL_OPENCV);
+    let c = window.cv;
+    if (c instanceof Promise) c = await c;
+    else if (!c.Mat) await new Promise(ok => { c.onRuntimeInitialized = ok; });
+    return c;
+  })();
+  return promesaCv;
+}
+// Puntos ORB de un lienzo, guardados como arreglos simples (los objetos de OpenCV se liberan enseguida)
+function puntosDe(cv, lienzo) {
+  const img = cv.imread(lienzo), gris = new cv.Mat();
+  cv.cvtColor(img, gris, cv.COLOR_RGBA2GRAY);
+  const orb = new cv.ORB(800), kp = new cv.KeyPointVector(), des = new cv.Mat(), vacia = new cv.Mat();
+  orb.detectAndCompute(gris, vacia, kp, des);
+  const n = kp.size(), xy = new Float32Array(2 * n);
+  for (let i = 0; i < n; i++) { const p = kp.get(i).pt; xy[2 * i] = p.x; xy[2 * i + 1] = p.y; }
+  const res = { n, xy, des: new Uint8Array(des.data), cols: des.cols };
+  [img, gris, kp, des, vacia, orb].forEach(m => m.delete());
+  return res;
+}
+// Fracción de puntos que encajan con una sola perspectiva (0 = nada en común)
+function mismosPuntos(cv, a, b) {
+  if (a.n < 20 || b.n < 20) return 0;
+  const da = cv.matFromArray(a.n, a.cols, cv.CV_8U, a.des), db = cv.matFromArray(b.n, b.cols, cv.CV_8U, b.des);
+  const bf = new cv.BFMatcher(cv.NORM_HAMMING, false), pares = new cv.DMatchVectorVector();
+  bf.knnMatch(da, db, pares, 2);
+  const A = [], B = [];
+  for (let i = 0; i < pares.size(); i++) {
+    const par = pares.get(i);
+    if (par.size() === 2) {
+      const p = par.get(0), q = par.get(1);
+      if (p.distance < 0.75 * q.distance) {
+        A.push(a.xy[2 * p.queryIdx], a.xy[2 * p.queryIdx + 1]); B.push(b.xy[2 * p.trainIdx], b.xy[2 * p.trainIdx + 1]);
+      }
+    }
+    par.delete();
+  }
+  let encajan = 0;
+  if (A.length >= 16) {
+    const ma = cv.matFromArray(A.length / 2, 1, cv.CV_32FC2, A), mb = cv.matFromArray(B.length / 2, 1, cv.CV_32FC2, B), mascara = new cv.Mat();
+    const H = cv.findHomography(ma, mb, cv.RANSAC, 6.0, mascara);
+    for (let i = 0; i < mascara.rows; i++) if (mascara.data[i]) encajan++;
+    [ma, mb, mascara, H].forEach(m => m.delete());
+  }
+  [da, db, pares, bf].forEach(m => m.delete());
+  return encajan / Math.min(a.n, b.n);
+}
+
 // ---------- exportar PDF: procesar → revisar → guardar ----------
 const aJpeg = (lienzo, calidad) => new Promise(ok => lienzo.toBlob(ok, 'image/jpeg', calidad));
 let revision = null;   // { nombre, paginas: [{ base, w, h, final, mini, fuera }] }
@@ -853,34 +1028,50 @@ async function exportarPdf() {
   if (!ks.length) { info('No hay fotos guardadas.'); return; }
   $('btnPdf').disabled = true;
   try {
-    // 1) huella pequeña de cada foto ya enderezada, para compararlas
+    // 1) de cada foto ya enderezada: huella pequeña y puntos característicos, para compararlas
+    let cv = null;
+    info('Cargando el comparador de diapositivas (la primera vez descarga unos 10 MB)…');
+    try { cv = await cargarOpenCV(); } catch (e) { info('Sin conexión: se compara con el método simple.'); }
     const fichas = [];
     let t0 = null;
     for (let i = 0; i < ks.length; i++) {
       info(`Revisando fotos… ${i + 1}/${ks.length}`);
       const reg = await leer(ks[i]);
       if (!t0) t0 = new Date(reg.t);
-      const bm = await createImageBitmap(reg.blob);
-      const c = enderezar(bm, reg.esq, 960, 480);
+      let bm;
+      try { bm = await createImageBitmap(reg.blob, { resizeWidth: 960, resizeQuality: 'medium' }); }
+      catch (e) { bm = await createImageBitmap(reg.blob); }
+      const c = enderezar(bm, reg.esq, 960, 640, lienzoHuella);
       bm.close();
       const huella = grisDe(c, 0, 0, c.width, c.height);
-      fichas.push({ clave: ks[i], huella, nitidez: nitidez(huella), esq: reg.esq });
+      fichas.push({ clave: ks[i], huella, nitidez: nitidez(huella), esq: reg.esq, puntos: cv ? puntosDe(cv, c) : null });
     }
     // 2) agrupar las seguidas que muestran la misma diapositiva
+    // casi idénticas se reconocen al instante; si no, deciden los puntos característicos (o, sin ellos, las celdas)
+    const misma = (a, b) => {
+      const p = compararAlineado(fichas[a].huella, fichas[b].huella).parecido;
+      if (p >= 0.85 || !cv) return p >= MISMA_DIAPOSITIVA;
+      return mismosPuntos(cv, fichas[a].puntos, fichas[b].puntos) >= MISMOS_PUNTOS;
+    };
+    const respirar = () => new Promise(r => setTimeout(r));   // deja que la pantalla se actualice
     const grupos = [[0]];
     for (let k = 1; k < fichas.length; k++) {
+      if (k % 5 === 0) { info(`Comparando fotos… ${k}/${fichas.length}`); await respirar(); }
       const g = grupos[grupos.length - 1];
-      if (g.slice(-3).some(j => comparar(fichas[k].huella, fichas[j].huella).parecido >= MISMA_DIAPOSITIVA)) g.push(k);
+      if (g.slice(-3).some(j => misma(k, j))) g.push(k);
       else grupos.push([k]);
     }
     // 3) si el profe vuelve a una diapositiva anterior, no repetirla
     const paginas = [];
-    for (const g of grupos) {
-      const rep = elegir(g, fichas);
-      const igual = paginas.find(p => p.miembros.some(j => comparar(fichas[rep].huella, fichas[j].huella).parecido >= MISMA_DIAPOSITIVA));
-      if (igual) { igual.miembros.push(...g); igual.rep = elegir(igual.miembros, fichas); }
+    for (let n = 0; n < grupos.length; n++) {
+      info(`Buscando diapositivas repetidas… ${n + 1}/${grupos.length}`);
+      await respirar();
+      const g = grupos[n], rep = elegir(g, fichas);
+      const igual = paginas.find(p => misma(rep, p.rep));   // contra la mejor foto de cada diapositiva anterior
+      if (igual) igual.miembros.push(...g);
       else paginas.push({ miembros: [...g], rep });
     }
+    for (const p of paginas) if (p.miembros.length > 1) { p.rep = elegir(p.miembros, fichas); await respirar(); }
     // 4) diapositivas que se van completando (viñetas que aparecen): quedarse solo con la versión completa
     for (let i = paginas.length - 2; i >= 0; i--) {
       if (!esVersionPrevia(fichas[paginas[i].rep].huella, fichas[paginas[i + 1].rep].huella)) continue;
@@ -888,6 +1079,7 @@ async function exportarPdf() {
       siguiente.apoyo = [...(siguiente.apoyo || []), ...paginas[i].miembros, ...(paginas[i].apoyo || [])];
       siguiente.rep = elegir(siguiente.miembros, fichas, siguiente.apoyo);
       paginas.splice(i, 1);
+      await respirar();
     }
     // 5) cada diapositiva enderezada, combinando fotos para borrar a quien la tapaba
     const listas = [];
@@ -918,12 +1110,12 @@ function aplicarFiltro() {
     for (let i = 0; i < ps.length; i++) {
       $('revTitulo').textContent = `Aplicando filtro… ${i + 1}/${ps.length}`;
       const bm = await createImageBitmap(ps[i].base);
-      const c = document.createElement('canvas'); c.width = ps[i].w; c.height = ps[i].h;
-      c.getContext('2d').drawImage(bm, 0, 0);
+      const c = lienzoFiltro; c.width = ps[i].w; c.height = ps[i].h;
+      c.getContext('2d', { willReadFrequently: true }).drawImage(bm, 0, 0);
       bm.close();
       filtrar(c, cfg.filtro);
       ps[i].final = await aJpeg(c, CALIDAD_JPEG);
-      const m = document.createElement('canvas'); m.width = 320; m.height = Math.round(320 * c.height / c.width);
+      const m = lienzoMini; m.width = 320; m.height = Math.round(320 * c.height / c.width);
       m.getContext('2d').drawImage(c, 0, 0, m.width, m.height);
       if (ps[i].mini) URL.revokeObjectURL(ps[i].mini);
       ps[i].mini = URL.createObjectURL(await aJpeg(m, 0.8));

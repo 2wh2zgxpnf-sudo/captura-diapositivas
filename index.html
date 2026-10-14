@@ -6,134 +6,297 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Captura de diapositivas</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #0b0d10; color: #e8eaed; font: 16px/1.4 -apple-system, system-ui, sans-serif;
-         padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-  main { max-width: 900px; margin: 0 auto; padding: 12px; }
-  h1 { font-size: 18px; margin: 4px 0 10px; }
-  #visor { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16/9;
-           width: 100%; margin: 0 auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+  :root { color-scheme: dark; --verde: #19c39a; --verde-osc: #0f9e7b; --rojo: #f0453a; --hoja: #1c1c1e; --hoja2: #2c2c2e;
+          --linea: rgba(255,255,255,.08); --texto2: #a1a1a6; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body { margin: 0; background: #000; color: #f2f2f7; font: 16px/1.35 -apple-system, system-ui, sans-serif; overflow: hidden;
+         user-select: none; -webkit-user-select: none; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:disabled { opacity: .35; }
+  svg.ic { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ---------- cámara ---------- */
+  #app { position: fixed; inset: 0; display: grid; grid-template-rows: auto 1fr auto auto;
+         grid-template-areas: "barra" "escena" "modos" "controles"; background: #000; }
+  #barra { grid-area: barra; display: flex; align-items: center; justify-content: space-between;
+           padding: calc(6px + env(safe-area-inset-top)) 10px 6px; }
+  #barra .grupo { display: flex; align-items: center; gap: 4px; }
+  .icono { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; position: relative; }
+  .icono.on { color: var(--verde); }
+  .icono .punto { position: absolute; right: 9px; bottom: 9px; width: 7px; height: 7px; border-radius: 50%; background: var(--rojo); }
+  .icono.on .punto { background: var(--verde); }
+  #resolucion { font-size: 11px; font-weight: 700; border: 1.6px solid currentColor; border-radius: 4px; padding: 1px 3px; opacity: .85; }
+  #escena { grid-area: escena; position: relative; overflow: hidden; display: grid; place-items: center; min-height: 0; }
+  #visor { position: relative; background: #000; touch-action: none; }
   video { width: 100%; height: 100%; object-fit: fill; display: block; }
   #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
-  #marco { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
-  #marco polygon { fill: rgba(255,212,59,.12); stroke: #ffd43b; stroke-width: 2; vector-effect: non-scaling-stroke; }
-  .esquina { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; display: none;
-             border: 3px solid #ffd43b; background: rgba(255,212,59,.25); touch-action: none; }
+  #marco { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; overflow: visible; }
+  #marco polygon { fill: rgba(25,195,154,.16); stroke: var(--verde); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+  .esquina { position: absolute; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%; display: none; touch-action: none; }
+  .esquina::after { content: ''; position: absolute; inset: 12px; border-radius: 50%; background: #fff; border: 3px solid var(--verde);
+                    box-shadow: 0 1px 6px rgba(0,0,0,.5); }
   #visor.marcando .esquina { display: block; }
-  #contador { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.65); padding: 4px 10px; border-radius: 8px;
-              font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  #estado { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,.65); padding: 4px 10px; border-radius: 8px; font-size: 13px; }
-  #ultima { display: none; height: 64px; max-width: 45%; object-fit: contain; margin: 8px auto 0; border: 1px solid #fff; border-radius: 6px; }
-  #ultima.grande { position: fixed; inset: 0; z-index: 10; width: 100%; height: 100%; max-width: none; margin: 0;
-                   border: 0; border-radius: 0; background: rgba(0,0,0,.92); }
-  .fila { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-  button { flex: 1 1 140px; min-height: 48px; border: 0; border-radius: 10px; font-size: 16px; font-weight: 600;
-           background: #2a2f37; color: #e8eaed; }
-  button.primario { background: #2f6fed; color: #fff; }
-  button.peligro { background: #5a1f24; color: #ffe1e3; }
-  button:disabled { opacity: .4; }
-  details { margin-top: 12px; background: #14171c; border-radius: 10px; padding: 10px 12px; }
-  summary { font-weight: 600; }
-  label { display: block; margin-top: 12px; font-size: 14px; color: #c3c8cf; }
-  label.casilla { display: flex; gap: 8px; align-items: center; }
-  input[type=range], select { width: 100%; }
-  select { min-height: 40px; font-size: 16px; background: #2a2f37; color: #e8eaed; border: 0; border-radius: 8px; padding: 0 8px; }
-  input[type=checkbox] { width: 22px; height: 22px; }
-  #info { margin-top: 10px; font-size: 13px; color: #c3c8cf; white-space: pre-line; }
-  #revision { position: fixed; inset: 0; z-index: 20; background: #0b0d10; overflow-y: auto;
-              padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
-  #revision[hidden] { display: none; }
-  #revTitulo { display: block; font-size: 17px; }
-  #revAyuda { font-size: 13px; color: #c3c8cf; margin-top: 4px; }
-  #revGrilla { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 12px; }
-  .pagina { position: relative; border-radius: 8px; overflow: hidden; background: #000; }
+  #estado { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.55);
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 4px 12px; border-radius: 999px;
+            font-size: 13px; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+  #estado::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #8e8e93; }
+  #app.vivo #estado::before { background: var(--verde); box-shadow: 0 0 0 3px rgba(25,195,154,.25); }
+  #portada { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; text-align: center;
+             color: var(--texto2); padding: 24px; font-size: 15px; }
+  #portada svg { width: 64px; height: 64px; stroke: var(--verde); stroke-width: 1.4; fill: none; }
+  #portada strong { color: #fff; font-size: 19px; }
+  #app.vivo #portada { display: none; }
+  #zoomBox { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column;
+             align-items: center; gap: 8px; width: min(86%, 360px); }
+  #zoomBox[hidden] { display: none; }
+  #zoomPills { display: flex; gap: 6px; background: rgba(0,0,0,.4); border-radius: 999px; padding: 4px; }
+  #zoomPills button { min-width: 38px; height: 38px; border-radius: 50%; font-size: 12px; font-weight: 700; background: rgba(40,40,40,.85); }
+  #zoomPills button.activo { background: var(--verde); color: #04261d; font-size: 13px; }
+  #regla { width: 100%; display: none; flex-direction: column; align-items: center; gap: 2px; }
+  #regla.abierta { display: flex; }
+  #zoomTxt { font-size: 13px; font-weight: 700; text-shadow: 0 1px 3px #000; }
+  #zoom { width: 100%; -webkit-appearance: none; appearance: none; height: 26px; background:
+          repeating-linear-gradient(90deg, rgba(255,255,255,.75) 0 1px, transparent 1px 7px) center / 100% 12px no-repeat; }
+  #zoom::-webkit-slider-thumb { -webkit-appearance: none; width: 3px; height: 26px; background: var(--verde); border-radius: 2px; }
+  #miniatura { position: absolute; right: 12px; bottom: 14px; display: none; }
+  #miniatura.hay { display: block; }
+  #ultima { display: block; width: 58px; height: 58px; object-fit: cover; border-radius: 6px; border: 2px solid #fff; background: #222; }
+  #contador { position: absolute; top: -8px; right: -8px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
+              background: var(--rojo); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center;
+              font-variant-numeric: tabular-nums; }
+  #visorFoto { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.94); display: none; }
+  #visorFoto.abierto { display: block; }
+  #visorFoto img { width: 100%; height: 100%; object-fit: contain; }
+  #info { position: fixed; z-index: 60; left: 50%; bottom: calc(190px + env(safe-area-inset-bottom)); transform: translate(-50%, 8px); max-width: 88%; width: max-content;
+          background: rgba(30,30,32,.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); padding: 9px 14px;
+          border-radius: 12px; font-size: 13.5px; white-space: pre-line; text-align: center; opacity: 0; pointer-events: none;
+          transition: opacity .2s, transform .2s; }
+  #info.ver { opacity: 1; transform: translate(-50%, 0); }
+  #modos { grid-area: modos; display: flex; justify-content: center; gap: 26px; padding: 12px 0 4px; font-size: 15px; }
+  #modos button { color: #e5e5ea; position: relative; padding-bottom: 8px; }
+  #modos button.activo { color: var(--verde); font-weight: 600; }
+  #modos button.activo::after { content: ''; position: absolute; left: 50%; bottom: 0; width: 18px; height: 3px; margin-left: -9px;
+                                border-radius: 2px; background: var(--verde); }
+  #controles { grid-area: controles; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+               padding: 10px 26px calc(18px + env(safe-area-inset-bottom)); }
+  #btnGirar { justify-self: start; }
+  #obturador { width: 76px; height: 76px; border-radius: 50%; border: 4px solid var(--verde); display: grid; place-items: center; }
+  #obturador::after { content: ''; width: 60px; height: 60px; border-radius: 50%; background: #fff; transition: transform .1s; }
+  #obturador:active::after { transform: scale(.9); }
+  #app:not(.vivo) #obturador::after { background: var(--verde); }
+  #app.vivo.auto #obturador { animation: latido 2.4s ease-in-out infinite; }
+  @keyframes latido { 50% { box-shadow: 0 0 0 7px rgba(25,195,154,.22); } }
+  #btnListo { justify-self: end; background: var(--verde); color: #fff; font-weight: 600; border-radius: 6px; padding: 10px 20px; font-size: 17px; }
+
+  /* celular de lado sin bloqueo de rotación: controles en una columna a la derecha */
+  @media (orientation: landscape) and (max-height: 560px) {
+    #app { grid-template-rows: 1fr; grid-template-columns: auto 1fr auto auto; grid-template-areas: "barra escena modos controles"; }
+    #barra { flex-direction: column; padding: 10px 4px 10px calc(4px + env(safe-area-inset-left)); }
+    #barra .grupo { flex-direction: column; }
+    #modos { flex-direction: column; justify-content: center; gap: 18px; padding: 0 6px; }
+    #controles { grid-template-columns: none; grid-template-rows: 1fr auto 1fr; justify-items: center;
+                 padding: 14px calc(14px + env(safe-area-inset-right)) 14px 8px; }
+    #btnGirar { justify-self: center; align-self: start; }
+    #btnListo { justify-self: center; align-self: end; }
+    #info { bottom: 24px; }
+  }
+
+  /* ---------- hoja de ajustes ---------- */
+  #fondo { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .25s; }
+  #fondo.ver { opacity: 1; pointer-events: auto; }
+  #ajustes { position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; max-height: 86%; overflow-y: auto; background: #000;
+             border-radius: 14px 14px 0 0; padding: 8px 16px calc(20px + env(safe-area-inset-bottom)); transform: translateY(105%);
+             transition: transform .28s cubic-bezier(.2,.8,.2,1); user-select: auto; -webkit-user-select: auto; }
+  #ajustes.ver { transform: none; }
+  @media (min-width: 700px) { #ajustes { left: 50%; width: 560px; margin-left: -280px; } }
+  .asa { width: 38px; height: 5px; border-radius: 3px; background: #48484a; margin: 0 auto 8px; }
+  .cabeza { display: flex; justify-content: space-between; align-items: center; padding: 4px 4px 10px; }
+  .cabeza h2 { font-size: 20px; margin: 0; }
+  .cabeza button { color: var(--verde); font-weight: 600; font-size: 17px; }
+  .grupo-t { font-size: 13px; color: var(--texto2); text-transform: uppercase; letter-spacing: .02em; margin: 18px 14px 6px; }
+  .lista { background: var(--hoja); border-radius: 12px; overflow: hidden; }
+  .fila { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 14px;
+          border-top: .5px solid var(--linea); font-size: 16px; }
+  .fila:first-child { border-top: 0; }
+  .fila.col { flex-direction: column; align-items: stretch; gap: 4px; padding: 10px 14px 12px; }
+  .fila .val { color: var(--texto2); font-variant-numeric: tabular-nums; }
+  .fila small { display: block; color: var(--texto2); font-size: 12.5px; line-height: 1.3; }
+  .fila .tope { display: flex; justify-content: space-between; }
+  .fila select { background: none; color: var(--texto2); border: 0; font: inherit; text-align: right; max-width: 60%; }
+  .fila button.accion { color: var(--verde); width: 100%; text-align: left; min-height: 30px; }
+  .fila button.accion.peligro { color: var(--rojo); }
+  input[type=range].desliz { width: 100%; accent-color: var(--verde); }
+  .interruptor { position: relative; flex: none; width: 51px; height: 31px; }
+  .interruptor input { position: absolute; inset: 0; opacity: 0; margin: 0; z-index: 1; }
+  .interruptor span { position: absolute; inset: 0; border-radius: 16px; background: #39393d; transition: background .2s; }
+  .interruptor span::after { content: ''; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+                             background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.3); transition: transform .2s; }
+  .interruptor input:checked + span { background: var(--verde); }
+  .interruptor input:checked + span::after { transform: translateX(20px); }
+  .interruptor input:disabled + span { opacity: .4; }
+
+  /* ---------- documento (exportación) ---------- */
+  #documento { position: fixed; inset: 0; z-index: 20; background: #eef0f2; color: #1c1c1e; display: flex; flex-direction: column;
+               color-scheme: light; }
+  #documento[hidden] { display: none; }
+  #docCabeza { display: flex; align-items: center; gap: 6px; background: #fff; padding: calc(6px + env(safe-area-inset-top)) 8px 6px;
+               box-shadow: 0 .5px 0 rgba(0,0,0,.12); }
+  #docCabeza .icono { color: #1c1c1e; }
+  #docTitulo { flex: 1; min-width: 0; }
+  #docNombre { font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+               border-bottom: 1px dashed #8e8e93; display: inline-block; max-width: 100%; }
+  #revTitulo { display: block; font-size: 12.5px; color: #6e6e73; margin-top: 1px; }
+  #docCuerpo { flex: 1; overflow-y: auto; padding: 12px 10px 16px; -webkit-overflow-scrolling: touch; }
+  #progreso { margin: 18vh auto 0; max-width: 320px; text-align: center; color: #3a3a3c; }
+  #progreso[hidden] { display: none; }
+  .rueda { width: 42px; height: 42px; margin: 0 auto 14px; border-radius: 50%; border: 4px solid #d1d5d9; border-top-color: var(--verde);
+           animation: gira 0.9s linear infinite; }
+  @keyframes gira { to { transform: rotate(360deg); } }
+  #progTxt { font-size: 15px; min-height: 2.6em; white-space: pre-line; }
+  .barraProg { height: 6px; border-radius: 3px; background: #d1d5d9; overflow: hidden; margin-top: 10px; }
+  #progBarra { height: 100%; width: 0; background: var(--verde); transition: width .2s; }
+  #revGrilla { display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 900px; margin: 0 auto; }
+  @media (min-width: 760px) { #revGrilla { grid-template-columns: 1fr 1fr; } }
+  .pagina { position: relative; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.14); }
   .pagina img { display: block; width: 100%; }
-  .pagina span { position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,.7); border-radius: 6px; padding: 1px 7px; font-size: 13px; }
-  .pagina.fuera img { opacity: .25; }
-  .pagina.fuera::after { content: 'quitada'; position: absolute; inset: auto 0 0 0; background: #5a1f24; color: #ffe1e3;
-                         text-align: center; font-size: 13px; padding: 2px; }
-  .rev-pie { position: sticky; bottom: 0; background: #0b0d10; padding-top: 8px; }
+  .pagina .num { position: absolute; top: 8px; left: 8px; background: rgba(60,60,67,.72); color: #fff; border-radius: 4px;
+                 padding: 1px 7px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .pagina .quitar { position: absolute; top: 6px; right: 6px; width: 34px; height: 34px; border-radius: 50%;
+                    background: rgba(255,255,255,.92); color: #3a3a3c; display: grid; place-items: center;
+                    box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .pagina .quitar svg { width: 19px; height: 19px; }
+  .pagina.fuera img { opacity: .22; filter: grayscale(1); }
+  .pagina.fuera .quitar { color: var(--verde-osc); }
+  .pagina.fuera::after { content: 'Quitada · toca ↺ para recuperarla'; position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
+                         text-align: center; font-size: 14px; color: #3a3a3c; pointer-events: none; }
+  #filtros { background: #fff; border-top: .5px solid rgba(0,0,0,.12); display: flex; gap: 14px; overflow-x: auto; padding: 12px 14px 8px; }
+  #filtros[hidden] { display: none; }
+  #filtros button { flex: none; width: 84px; display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 12.5px; color: #3a3a3c; }
+  #filtros img, #filtros .vacio { width: 84px; height: 56px; object-fit: cover; border-radius: 6px; border: 2.5px solid transparent; background: #e5e5ea; }
+  #filtros button.activo img, #filtros button.activo .vacio { border-color: var(--verde); }
+  #filtros button.activo { color: var(--verde-osc); font-weight: 600; }
+  #docBarra { display: grid; grid-template-columns: repeat(5, 1fr); background: #fff; border-top: .5px solid rgba(0,0,0,.12);
+              padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
+  #docBarra button { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11.5px; color: #1c1c1e; padding: 4px 0; }
+  #docBarra button.on { color: var(--verde-osc); }
+  #docBarra svg.ic { width: 25px; height: 25px; stroke-width: 1.7; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Captura de diapositivas</h1>
-  <div id="visor">
-    <video id="video" playsinline muted autoplay></video>
-    <svg id="marco" viewBox="0 0 100 100" preserveAspectRatio="none"><polygon></polygon></svg>
-    <div id="flash"></div>
-    <div id="contador">0</div>
+<div id="app" class="auto">
+  <header id="barra">
+    <button class="icono" id="btnCerrar" aria-label="Detener la cámara">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <div class="grupo">
+      <span id="resolucion" hidden></span>
+      <button class="icono" id="btnBloqueo" aria-label="Bloquear enfoque" disabled>
+        <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/></svg>
+        <span class="punto"></span></button>
+      <button class="icono" id="btnAjustes" aria-label="Configuración">
+        <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="19" r="1.3" fill="currentColor"/></svg></button>
+    </div>
+  </header>
+
+  <section id="escena">
+    <div id="visor">
+      <video id="video" playsinline muted autoplay></video>
+      <svg id="marco" viewBox="0 0 100 100" preserveAspectRatio="none"><polygon></polygon></svg>
+      <div id="flash"></div>
+    </div>
+    <div id="portada">
+      <svg viewBox="0 0 48 48"><rect x="6" y="10" width="36" height="24" rx="2"/><path d="M18 40h12M24 34v6M14 18h14M14 24h20"/></svg>
+      <strong>Captura de diapositivas</strong>
+      <span>Pon el celular fijo apuntando al tablero y toca el botón verde.</span>
+    </div>
     <div id="estado">detenido</div>
+    <div id="zoomBox" hidden>
+      <div id="regla"><span id="zoomTxt"></span><input id="zoom" type="range" aria-label="Zoom"></div>
+      <div id="zoomPills"></div>
+    </div>
+    <button id="miniatura" aria-label="Ver la última foto"><img id="ultima" alt=""><span id="contador">0</span></button>
+  </section>
+
+  <nav id="modos">
+    <button data-modo="zona">Marcar zona</button>
+    <button data-modo="auto" class="activo">Automático</button>
+    <button data-modo="manual">Manual</button>
+  </nav>
+
+  <div id="controles">
+    <button class="icono" id="btnGirar" aria-label="Voltear 180°">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9"/><path d="M4.5 4.5V9H9"/></svg></button>
+    <button id="obturador" aria-label="Iniciar o tomar foto"></button>
+    <button id="btnListo">Listo</button>
+  </div>
+</div>
+<div id="visorFoto"><img alt="última foto"></div>
+<div id="info" role="status"></div>
+
+<div id="fondo"></div>
+<div id="ajustes" role="dialog" aria-label="Configuración">
+  <div class="asa"></div>
+  <div class="cabeza"><h2>Configuración</h2><button id="btnAjustesListo">Listo</button></div>
+
+  <div class="grupo-t">Detección</div>
+  <div class="lista">
+    <label class="fila col"><span class="tope">Sensibilidad <span class="val"><span id="sensTxt"></span> %</span></span>
+      <input id="sens" class="desliz" type="range" min="1" max="30">
+      <small>Parte de la pantalla que debe cambiar de golpe. Más bajo capta hasta una viñeta nueva; más alto, solo cambios grandes.</small></label>
+    <label class="fila col"><span class="tope">Confirmación <span class="val" id="confirmarTxt"></span></span>
+      <input id="confirmar" class="desliz" type="range" min="2" max="10" step="1">
+      <small>Cuadros quietos para dar la transición por terminada. Súbelo si el profe usa animaciones lentas.</small></label>
+    <label class="fila col"><span class="tope">Pausa mínima entre fotos <span class="val" id="pausaTxt"></span></span>
+      <input id="pausa" class="desliz" type="range" min="0" max="10" step="0.5"></label>
+    <label class="fila col"><span class="tope">Foto de control cada <span class="val" id="redTxt"></span></span>
+      <input id="red" class="desliz" type="range" min="0" max="120" step="5"></label>
   </div>
 
-  <div class="fila">
-    <button id="btnIniciar" class="primario">Iniciar</button>
-    <button id="btnMarco" disabled>Marcar pantalla</button>
-    <button id="btnManual" disabled>Capturar ahora</button>
-  </div>
-  <div class="fila">
-    <button id="btnPdf">Exportar PDF limpio</button>
-    <button id="btnExportar">Exportar ZIP (originales)</button>
-    <button id="btnBorrar" class="peligro">Borrar fotos</button>
-  </div>
-
-  <label id="filaZoom" hidden>Zoom de la cámara: <span id="zoomTxt"></span>×
-    <input id="zoom" type="range">
-  </label>
-
-  <details>
-    <summary>Configuración</summary>
-    <label>Cámara
-      <select id="camara"></select>
-    </label>
-    <label>Sensibilidad: dispara cuando cambia de golpe al menos el <span id="sensTxt"></span>% de la zona
-      (más bajo = capta hasta una viñeta nueva; más alto = solo cambios grandes)
-      <input id="sens" type="range" min="1" max="30">
-    </label>
-    <label>Confirmación: <span id="confirmarTxt"></span> cuadros seguidos sin cambios para dar la transición por terminada
-      (súbelo si el profe usa transiciones animadas lentas)
-      <input id="confirmar" type="range" min="2" max="10" step="1">
-    </label>
-    <label>Pausa mínima entre fotos: <span id="pausaTxt"></span>
-      <input id="pausa" type="range" min="0" max="10" step="0.5">
-    </label>
-    <label>Red de seguridad (foto de control) cada <span id="redTxt"></span>
-      <input id="red" type="range" min="0" max="120" step="5">
-    </label>
-    <label>Orientación de las fotos
+  <div class="grupo-t">Cámara y fotos</div>
+  <div class="lista">
+    <label class="fila">Cámara <select id="camara"></select></label>
+    <label class="fila">Orientación
       <select id="giro">
-        <option value="auto">Siempre horizontal (automático)</option>
+        <option value="auto">Siempre horizontal</option>
         <option value="0">Como sale de la cámara</option>
-        <option value="90">Girar 90° a la derecha</option>
-        <option value="180">Girar 180°</option>
-        <option value="270">Girar 90° a la izquierda</option>
-      </select>
-    </label>
-    <label class="casilla"><input id="voltear" type="checkbox"> Voltear 180° (si salen de cabeza)</label>
-    <label class="casilla"><input id="bloqueo" type="checkbox" disabled> <span id="bloqueoTxt">Bloquear enfoque (inicia la cámara para saber si se puede)</span></label>
-    <label class="casilla"><input id="recortar" type="checkbox"> Guardar solo la zona marcada (con un margen)</label>
-    <div class="fila"><button id="btnQuitarMarco">Quitar zona marcada</button></div>
-  </details>
-  <div id="info">Pon el celular fijo (trípode o soporte), toca Iniciar y luego «Marcar pantalla» para llevar las 4 esquinas amarillas a las esquinas del tablero o televisor.</div>
-</main>
-
-<div id="revision" hidden>
-  <strong id="revTitulo"></strong>
-  <div id="revAyuda">Toca una diapositiva para quitarla o volver a ponerla.</div>
-  <label>Filtro
-    <select id="filtro">
-      <option value="mejorado">Mejorado (color, contraste y nitidez)</option>
-      <option value="original">Original (solo enderezada)</option>
-      <option value="byn">Blanco y negro (texto)</option>
-    </select>
-  </label>
-  <label class="casilla"><input id="ocr" type="checkbox"> Reconocer el texto (PDF buscable y copiable; tarda más)</label>
-  <div id="revGrilla"></div>
-  <div class="fila rev-pie">
-    <button id="btnRevVolver">Volver</button>
-    <button id="btnRevGuardar" class="primario">Guardar PDF</button>
+        <option value="90">90° a la derecha</option>
+        <option value="180">180°</option>
+        <option value="270">90° a la izquierda</option>
+      </select></label>
+    <label class="fila"><span>Voltear 180°<small>Si las fotos salen de cabeza</small></span>
+      <span class="interruptor"><input id="voltear" type="checkbox"><span></span></span></label>
+    <label class="fila"><span>Bloquear enfoque<small id="bloqueoTxt">Inicia la cámara para saber si se puede</small></span>
+      <span class="interruptor"><input id="bloqueo" type="checkbox" disabled><span></span></span></label>
+    <label class="fila"><span>Guardar solo la zona marcada<small>Con un pequeño margen alrededor</small></span>
+      <span class="interruptor"><input id="recortar" type="checkbox"><span></span></span></label>
+    <div class="fila"><button class="accion" id="btnQuitarMarco">Quitar la zona marcada</button></div>
   </div>
+
+  <div class="grupo-t">Fotos guardadas</div>
+  <div class="lista">
+    <div class="fila"><button class="accion" id="btnExportar">Exportar ZIP con las fotos originales</button></div>
+    <div class="fila"><button class="accion peligro" id="btnBorrar">Borrar todas las fotos</button></div>
+  </div>
+</div>
+
+<div id="documento" hidden>
+  <header id="docCabeza">
+    <button class="icono" id="btnRevVolver" aria-label="Volver a la cámara">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div id="docTitulo"><span id="docNombre">Documento</span><span id="revTitulo"></span></div>
+  </header>
+  <div id="docCuerpo">
+    <div id="progreso"><div class="rueda"></div><div id="progTxt">Preparando…</div><div class="barraProg"><div id="progBarra"></div></div></div>
+    <div id="revGrilla"></div>
+  </div>
+  <div id="filtros" hidden></div>
+  <nav id="docBarra">
+    <button id="btnSeguir"><svg class="ic" viewBox="0 0 24 24"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1.5-2h6l1.5 2h2A1.5 1.5 0 0 1 20 8.5V18a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18z"/><circle cx="12" cy="13" r="3.3"/></svg>Cámara</button>
+    <button id="btnFiltros"><svg class="ic" viewBox="0 0 24 24"><circle cx="9" cy="9" r="5"/><circle cx="15" cy="9" r="5"/><circle cx="12" cy="15" r="5"/></svg>Filtros</button>
+    <button id="btnOcr"><svg class="ic" viewBox="0 0 24 24"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M8 9h8M12 9v7"/></svg><span id="ocrTxt">Texto</span></button>
+    <button id="btnZip"><svg class="ic" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4V20a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 20z"/><path d="M11 4v2h2v2h-2v2h2v2h-2v2"/></svg>ZIP</button>
+    <button id="btnRevGuardar"><svg class="ic" viewBox="0 0 24 24"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M6 11H5.5A1.5 1.5 0 0 0 4 12.5v6A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-6a1.5 1.5 0 0 0-1.5-1.5H18"/></svg><span id="guardarTxt">PDF</span></button>
+  </nav>
 </div>
 
 <script>
@@ -150,7 +313,7 @@ const ANCHO_PDF = 1600;          // ancho máximo en píxeles de cada diapositiv
 
 // ---------- configuración (se recuerda entre sesiones) ----------
 const cfg = { sens: 3, confirmar: 3, pausa: 0, red: 0, recortar: true, quad: null, camara: '', giro: 'auto', voltear: false,
-              bloqueo: false, filtro: 'mejorado', ocr: true };
+              bloqueo: false, filtro: 'mejorado', ocr: true, modo: 'auto' };
 try {
   const guardada = localStorage.getItem('cfg5');
   if (guardada) Object.assign(cfg, JSON.parse(guardada));
@@ -167,12 +330,10 @@ const video = $('video'), visor = $('visor'), marco = $('marco');
 const lienzoA = document.createElement('canvas'); lienzoA.width = AW; lienzoA.height = AH;
 const ctxA = lienzoA.getContext('2d', { willReadFrequently: true });
 const lienzoF = document.createElement('canvas');
-// miniatura de la última captura: se crea aquí porque no tiene imagen hasta la primera foto.
-// Va debajo del visor para no tapar la cámara; al tocarla se ve a pantalla completa.
-const ultima = Object.assign(document.createElement('img'), { id: 'ultima', alt: 'última captura' });
-visor.after(ultima);
+// miniatura de la última captura (abajo a la derecha); al tocarla se ve a pantalla completa
+const ultima = $('ultima');
 
-let activo = false, ocupado = false, timer = null, wakeLock = null, pista = null, marcando = false;
+let activo = false, ocupado = false, timer = null, wakeLock = null, pista = null, marcando = false, ultimoZoom = 0;
 let ref = null, prev = null, ultimaCaptura = 0, ultimaRevision = 0, total = 0;
 // detección por evento: por cada celda, cuántos cuadros seguidos lleva sin cambiar
 const NCELDAS = (AW / CELDA) * (AH / CELDA);
@@ -231,18 +392,20 @@ function pintarMarco() {
   marco.firstElementChild.setAttribute('points', q.map(p => `${p[0] * 100},${p[1] * 100}`).join(' '));
   q.forEach((p, i) => Object.assign(esquinas[i].style, { left: p[0] * 100 + '%', top: p[1] * 100 + '%' }));
 }
+// el visor ocupa todo lo que deja la escena, con la misma proporción del video (las esquinas van en fracciones de él)
 function ajustarVisor() {
   if (!video.videoWidth) return;
-  const ar = video.videoWidth / video.videoHeight;
-  visor.style.aspectRatio = ar;
-  visor.style.width = Math.min(visor.parentElement.clientWidth - 24, innerHeight * 0.7 * ar) + 'px';
+  const ar = video.videoWidth / video.videoHeight, e = $('escena');
+  const w = Math.min(e.clientWidth, e.clientHeight * ar);
+  visor.style.width = w + 'px'; visor.style.height = w / ar + 'px';
 }
 video.addEventListener('resize', ajustarVisor);
 addEventListener('resize', ajustarVisor);
+addEventListener('orientationchange', () => setTimeout(ajustarVisor, 300));
 
 function finMarcado() {
   marcando = false; visor.classList.remove('marcando');
-  $('btnMarco').textContent = 'Marcar pantalla';
+  pintarModos();
   pintarMarco(); guardarCfg();
   ref = prev = null;   // la zona cambió: empezar de cero
   info(cfg.quad ? 'Zona guardada. Solo se vigila esa parte de la imagen.' : 'Sin zona marcada: se vigila toda la imagen.');
@@ -388,7 +551,8 @@ function enZonaDeMovimiento(i) {
   return false;
 }
 function tick() {
-  if (!activo || ocupado || marcando || video.readyState < 2) return;
+  if (!activo || ocupado || marcando || cfg.modo === 'manual' || video.readyState < 2) return;
+  if (Date.now() - ultimoZoom < 700) return;   // mientras cambia el zoom la imagen no es comparable
   const cur = cuadroGris();
   const ahora = Date.now();
   if (!ref) {
@@ -479,7 +643,7 @@ async function capturar(tipo, gris) {
     ultimaCaptura = ultimaRevision = Date.now();
     total++; $('contador').textContent = total;
     if (ultima.src) URL.revokeObjectURL(ultima.src);
-    ultima.src = URL.createObjectURL(blob); ultima.style.display = 'block';
+    ultima.src = URL.createObjectURL(blob); $('miniatura').classList.add('hay');
     const f = $('flash'); f.style.transition = 'none'; f.style.opacity = .7;
     requestAnimationFrame(() => { f.style.transition = 'opacity .25s'; f.style.opacity = 0; });
   } catch (e) {
@@ -540,7 +704,9 @@ async function abrirCamara() {
   await listarCamaras();
   prepararZoom();
   prepararBloqueo();
-  const s = pista.getSettings();
+  const s = pista.getSettings(), lado = Math.min(s.width || 0, s.height || 0);
+  $('resolucion').textContent = lado >= 2160 ? '4K' : lado >= 1080 ? 'HD' : 'SD';
+  $('resolucion').hidden = !lado;
   return `${s.width}×${s.height}`;
 }
 async function listarCamaras() {
@@ -549,23 +715,42 @@ async function listarCamaras() {
   const actual = pista && pista.getSettings().deviceId;
   sel.replaceChildren(...camaras.map((d, i) => new Option(d.label || `Cámara ${i + 1}`, d.deviceId, false, d.deviceId === actual)));
 }
+// Zoom como en la cámara del iPhone: botones con los valores típicos; tocar el activo abre la regla fina
+const textoZoom = v => String(Math.round(v * 10) / 10).replace('.', ',');
 function prepararZoom() {
   const cap = pista.getCapabilities ? pista.getCapabilities() : {};
-  const z = $('zoom');
-  $('filaZoom').hidden = !cap.zoom;
+  $('zoomBox').hidden = !cap.zoom;
   if (!cap.zoom) return;
-  z.min = cap.zoom.min; z.max = Math.min(cap.zoom.max, 10); z.step = cap.zoom.step || 0.1;
-  z.value = pista.getSettings().zoom || cap.zoom.min;
-  $('zoomTxt').textContent = (+z.value).toFixed(1);
+  const z = $('zoom'), min = cap.zoom.min, max = Math.min(cap.zoom.max, 10);
+  z.min = min; z.max = max; z.step = cap.zoom.step || 0.1;
+  const fijos = [...new Set([min, 1, 2, 3, 5].filter(v => v >= min && v <= max))];
+  $('zoomPills').replaceChildren(...fijos.map(v => {
+    const b = document.createElement('button');
+    b.dataset.v = v;
+    b.onclick = () => { if (b.classList.contains('activo')) $('regla').classList.toggle('abierta'); else ponerZoom(v); };
+    return b;
+  }));
+  pintarZoom(pista.getSettings().zoom || min);
+}
+function pintarZoom(v) {
+  $('zoom').value = v; $('zoomTxt').textContent = textoZoom(v) + '×';
+  const bs = [...$('zoomPills').children], activo = bs.filter(b => +b.dataset.v <= v + 1e-6).pop() || bs[0];
+  bs.forEach(b => { const on = b === activo; b.classList.toggle('activo', on); b.textContent = on ? textoZoom(v) + '×' : textoZoom(+b.dataset.v); });
+}
+async function ponerZoom(v) {
+  pintarZoom(v);
+  ultimoZoom = Date.now();
+  try { await pista.applyConstraints({ advanced: [{ zoom: v }] }); ref = prev = null; }
+  catch (err) { info('Esta cámara no permitió cambiar el zoom: ' + err.message); }
 }
 // Bloqueo de enfoque: solo existe si el navegador deja fijar el enfoque de la cámara
 function prepararBloqueo() {
   const cap = pista.getCapabilities ? pista.getCapabilities() : {};
   const puede = Array.isArray(cap.focusMode) && cap.focusMode.includes('manual');
-  $('bloqueo').disabled = !puede;
+  $('bloqueo').disabled = $('btnBloqueo').disabled = !puede;
   $('bloqueo').checked = puede && cfg.bloqueo;
-  $('bloqueoTxt').textContent = puede ? 'Bloquear enfoque (deja que enfoque bien antes de activarlo)'
-                                      : 'Bloquear enfoque: este navegador no lo permite';
+  $('btnBloqueo').classList.toggle('on', puede && cfg.bloqueo);
+  $('bloqueoTxt').textContent = puede ? 'Deja que enfoque bien antes de activarlo' : 'Este navegador no lo permite';
   // al abrir la cámara se le da un momento para enfocar antes de fijarlo
   if (puede && cfg.bloqueo) setTimeout(() => aplicarBloqueo(true), 2000);
 }
@@ -574,13 +759,18 @@ async function aplicarBloqueo(fijo) {
   try { await pista.applyConstraints({ advanced: [{ focusMode: fijo ? 'manual' : 'continuous' }] }); }
   catch (err) { info('No se pudo cambiar el enfoque: ' + err.message); }
 }
-$('bloqueo').onchange = e => { cfg.bloqueo = e.target.checked; guardarCfg(); aplicarBloqueo(cfg.bloqueo); };
-
-$('zoom').oninput = async e => {
-  $('zoomTxt').textContent = (+e.target.value).toFixed(1);
-  try { await pista.applyConstraints({ advanced: [{ zoom: +e.target.value }] }); ref = prev = null; }
-  catch (err) { info('Esta cámara no permitió cambiar el zoom: ' + err.message); }
+function ponerBloqueo(fijo) {
+  cfg.bloqueo = fijo; guardarCfg();
+  $('bloqueo').checked = fijo; $('btnBloqueo').classList.toggle('on', fijo);
+  aplicarBloqueo(fijo);
+}
+$('bloqueo').onchange = e => ponerBloqueo(e.target.checked);
+$('btnBloqueo').onclick = () => {
+  ponerBloqueo(!cfg.bloqueo);
+  info(cfg.bloqueo ? 'Enfoque bloqueado' : 'Enfoque automático');
 };
+
+$('zoom').oninput = e => ponerZoom(+e.target.value);
 $('camara').onchange = async e => {
   cfg.camara = e.target.value; guardarCfg();
   if (!activo) return;
@@ -595,9 +785,10 @@ async function iniciar() {
     await pedirWakeLock();
     activo = true; ref = prev = null;
     timer = setInterval(tick, TICK_MS);
-    $('btnIniciar').textContent = 'Detener';
-    $('btnManual').disabled = $('btnMarco').disabled = false;
-    info(`Cámara: ${res}. ` + (cfg.quad ? 'Se vigila la zona amarilla.' : 'Toca «Marcar pantalla» y lleva las 4 esquinas al tablero.') +
+    $('app').classList.add('vivo');
+    requestAnimationFrame(ajustarVisor);
+    estado(cfg.modo === 'manual' ? 'manual · toca el botón para tomar foto' : 'vigilando');
+    info(`Cámara: ${res}. ` + (cfg.quad ? 'Se vigila la zona verde.' : 'Toca «Marcar zona» y lleva los 4 puntos a las esquinas del tablero.') +
          '\nDeja esta página abierta y la pantalla encendida.');
   } catch (e) {
     info('No se pudo abrir la cámara: ' + e.message + '\nLa página debe abrirse por https y con permiso de cámara.');
@@ -609,8 +800,8 @@ function detener() {
   video.srcObject = null; pista = null;
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   if (marcando) finMarcado();
-  $('btnIniciar').textContent = 'Iniciar';
-  $('btnManual').disabled = $('btnMarco').disabled = true;
+  $('app').classList.remove('vivo');
+  $('resolucion').hidden = $('zoomBox').hidden = true;
   estado('detenido');
 }
 
@@ -1023,10 +1214,11 @@ function mismosPuntos(cv, a, b) {
 const aJpeg = (lienzo, calidad) => new Promise(ok => lienzo.toBlob(ok, 'image/jpeg', calidad));
 let revision = null;   // { nombre, paginas: [{ base, w, h, final, mini, fuera }] }
 
+let preparando = false;
 async function exportarPdf() {
   const ks = await claves();
   if (!ks.length) { info('No hay fotos guardadas.'); return; }
-  $('btnPdf').disabled = true;
+  preparando = true;
   try {
     // 1) de cada foto ya enderezada: huella pequeña y puntos característicos, para compararlas
     let cv = null;
@@ -1090,13 +1282,16 @@ async function exportarPdf() {
     }
     const nombre = `clase_${t0.getFullYear()}-${p2(t0.getMonth() + 1)}-${p2(t0.getDate())}_${p2(t0.getHours())}${p2(t0.getMinutes())}.pdf`;
     revision = { nombre, fotos: ks.length, paginas: listas };
-    $('revision').hidden = false;
+    $('docNombre').textContent = nombre.replace(/\.pdf$/, '');
+    info('Aplicando el filtro…');
     await aplicarFiltro();
-    info('');
+    $('progreso').hidden = true;
+    pintarFiltros();
   } catch (e) {
+    $('progreso').querySelector('.rueda').hidden = true;
     info('Error al preparar el PDF: ' + e.message);
   } finally {
-    $('btnPdf').disabled = false;
+    preparando = false;
   }
 }
 
@@ -1115,7 +1310,7 @@ function aplicarFiltro() {
       bm.close();
       filtrar(c, cfg.filtro);
       ps[i].final = await aJpeg(c, CALIDAD_JPEG);
-      const m = lienzoMini; m.width = 320; m.height = Math.round(320 * c.height / c.width);
+      const m = lienzoMini; m.width = Math.min(1000, c.width); m.height = Math.round(m.width * c.height / c.width);
       m.getContext('2d').drawImage(c, 0, 0, m.width, m.height);
       if (ps[i].mini) URL.revokeObjectURL(ps[i].mini);
       ps[i].mini = URL.createObjectURL(await aJpeg(m, 0.8));
@@ -1125,23 +1320,57 @@ function aplicarFiltro() {
   });
   return filtrando;
 }
+const ICONO_QUITAR = '<svg class="ic" viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 12.5h8L17 7M10.5 10.5v6M13.5 10.5v6"/></svg>';
+const ICONO_VOLVER = '<svg class="ic" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9"/><path d="M4.5 4.5V9H9"/></svg>';
 function pintarRevision() {
   const ps = revision.paginas, quedan = ps.filter(p => !p.fuera).length;
   $('revTitulo').textContent = `${revision.fotos} fotos → ${quedan} diapositivas`;
-  $('btnRevGuardar').textContent = `Guardar PDF (${quedan})`;
+  $('guardarTxt').textContent = `PDF (${quedan})`;
   $('revGrilla').replaceChildren(...ps.map((p, i) => {
     const d = Object.assign(document.createElement('div'), { className: 'pagina' + (p.fuera ? ' fuera' : '') });
+    const quitar = Object.assign(document.createElement('button'), { className: 'quitar', innerHTML: p.fuera ? ICONO_VOLVER : ICONO_QUITAR });
+    quitar.setAttribute('aria-label', p.fuera ? 'Recuperar diapositiva' : 'Quitar diapositiva');
+    quitar.onclick = () => { p.fuera = !p.fuera; pintarRevision(); };
     d.append(Object.assign(document.createElement('img'), { src: p.mini, alt: `diapositiva ${i + 1}` }),
-             Object.assign(document.createElement('span'), { textContent: i + 1 }));
-    d.onclick = () => { p.fuera = !p.fuera; pintarRevision(); };
+             Object.assign(document.createElement('span'), { className: 'num', textContent: `${i + 1}/${ps.length}` }), quitar);
     return d;
   }));
+}
+// Barra de filtros: la primera diapositiva con cada filtro, como en CamScanner
+const FILTROS = [['original', 'Original'], ['mejorado', 'Mejorado'], ['byn', 'Blanco y negro']];
+async function pintarFiltros() {
+  const botones = FILTROS.map(([f, nombre]) => {
+    const b = Object.assign(document.createElement('button'), { className: f === cfg.filtro ? 'activo' : '' });
+    b.dataset.f = f;
+    b.append(Object.assign(document.createElement('span'), { className: 'vacio' }), nombre);
+    b.onclick = () => elegirFiltro(f);
+    return b;
+  });
+  $('filtros').replaceChildren(...botones);
+  if (!revision || !revision.paginas.length) return;
+  const p = revision.paginas[0], bm = await createImageBitmap(p.base), c = document.createElement('canvas');
+  for (const b of botones) {
+    c.width = 200; c.height = Math.round(200 * p.h / p.w);
+    c.getContext('2d', { willReadFrequently: true }).drawImage(bm, 0, 0, c.width, c.height);
+    filtrar(c, b.dataset.f);
+    const img = new Image();
+    img.src = URL.createObjectURL(await aJpeg(c, 0.8));
+    b.firstChild.replaceWith(img);
+  }
+  bm.close();
+}
+function elegirFiltro(f) {
+  if (f === cfg.filtro) return;
+  cfg.filtro = f; guardarCfg();
+  [...$('filtros').children].forEach(b => b.classList.toggle('activo', b.dataset.f === f));
+  aplicarFiltro();
 }
 async function guardarPdf() {
   await filtrando;
   const ps = revision.paginas.filter(p => !p.fuera);
   if (!ps.length) return;
   $('btnRevGuardar').disabled = true;
+  info(cfg.ocr ? 'Leyendo el texto de las diapositivas…' : 'Armando el PDF…');
   try {
     const paginas = [];
     let sinTexto = false;
@@ -1168,44 +1397,107 @@ async function guardarPdf() {
 
 // ---------- interfaz ----------
 function estado(t) { $('estado').textContent = t; }
-function info(t) { $('info').textContent = t; }
+// Mensajes: mientras se prepara el documento van a su pantalla de progreso; si no, como aviso flotante
+let tInfo = null;
+function info(t) {
+  if (!$('documento').hidden && !$('progreso').hidden) {
+    $('progTxt').textContent = t;
+    const m = /(\d+)\/(\d+)/.exec(t);
+    $('progBarra').style.width = m ? (100 * m[1] / m[2]) + '%' : '0';
+    return;
+  }
+  const e = $('info');
+  clearTimeout(tInfo);
+  if (!t) { e.classList.remove('ver'); return; }
+  e.textContent = t; e.classList.add('ver');
+  tInfo = setTimeout(() => e.classList.remove('ver'), Math.max(3500, t.length * 70));
+}
 
-$('btnIniciar').onclick = () => activo ? detener() : iniciar();
-$('btnManual').onclick = () => capturar('manual');
-$('btnExportar').onclick = exportar;
-$('btnPdf').onclick = exportarPdf;
-$('giro').value = String(cfg.giro);
-$('giro').onchange = e => { cfg.giro = e.target.value === 'auto' ? 'auto' : +e.target.value; guardarCfg(); };
-$('voltear').checked = cfg.voltear;
-$('voltear').onchange = e => { cfg.voltear = e.target.checked; guardarCfg(); };
-$('filtro').value = cfg.filtro;
-$('filtro').onchange = e => { cfg.filtro = e.target.value; guardarCfg(); aplicarFiltro(); };
-$('ocr').checked = cfg.ocr;
-$('ocr').onchange = e => { cfg.ocr = e.target.checked; guardarCfg(); };
-$('btnRevVolver').onclick = () => { $('revision').hidden = true; };
-$('btnRevGuardar').onclick = guardarPdf;
-$('btnBorrar').onclick = async () => {
-  if (!confirm('¿Borrar todas las fotos guardadas en este celular? Exporta primero si no lo has hecho.')) return;
-  await vaciar(); total = 0; $('contador').textContent = 0; ultima.style.display = 'none';
-  info('Fotos borradas.');
-};
-$('btnMarco').onclick = () => {
-  if (marcando) { finMarcado(); return; }
+// modos: Marcar zona · Automático · Manual
+function pintarModos() {
+  document.querySelectorAll('#modos button').forEach(b =>
+    b.classList.toggle('activo', marcando ? b.dataset.modo === 'zona' : b.dataset.modo === cfg.modo));
+  $('app').classList.toggle('auto', cfg.modo === 'auto');
+}
+function empezarMarcado() {
+  if (!activo) { info('Primero inicia la cámara con el botón verde.'); return; }
   if (!cfg.quad) cfg.quad = [[.25, .3], [.75, .3], [.75, .7], [.25, .7]];
   marcando = true; visor.classList.add('marcando');
-  $('btnMarco').textContent = 'Listo';
-  pintarMarco();
-  info('Arrastra cada círculo amarillo hasta una esquina del tablero o televisor y toca «Listo».');
+  pintarModos(); pintarMarco();
+  estado('marcando la zona');
+  info('Arrastra los 4 puntos a las esquinas del tablero o televisor.\nLuego toca «Automático» o «Manual».');
+}
+document.querySelectorAll('#modos button').forEach(b => b.onclick = () => {
+  const m = b.dataset.modo;
+  if (m === 'zona') { if (marcando) finMarcado(); else empezarMarcado(); return; }
+  const cambia = m !== cfg.modo;
+  cfg.modo = m; guardarCfg();
+  if (marcando) finMarcado(); else pintarModos();
+  if (!cambia) return;
+  if (m === 'auto') { ref = prev = null; estado('vigilando'); info('Automático: toma la foto cuando se pasa la diapositiva.'); }
+  else { estado('manual · toca el botón para tomar foto'); info('Manual: solo toma foto cuando tocas el botón.'); }
+});
+
+$('obturador').onclick = () => { if (!activo) iniciar(); else if (marcando) finMarcado(); else capturar('manual'); };
+$('btnCerrar').onclick = () => { if (activo) { detener(); info('Cámara detenida. Las fotos siguen guardadas.'); } };
+$('btnGirar').onclick = () => {
+  cfg.voltear = !cfg.voltear; guardarCfg();
+  $('voltear').checked = cfg.voltear; $('btnGirar').classList.toggle('on', cfg.voltear);
+  info(cfg.voltear ? 'Las fotos nuevas salen volteadas 180°' : 'Las fotos nuevas salen sin voltear');
 };
-$('btnQuitarMarco').onclick = () => { cfg.quad = null; finMarcado(); };
-ultima.onclick = () => ultima.classList.toggle('grande');
+$('miniatura').onclick = () => { $('visorFoto').firstElementChild.src = ultima.src; $('visorFoto').classList.add('abierto'); };
+$('visorFoto').onclick = () => $('visorFoto').classList.remove('abierto');
+
+// hoja de configuración
+const abrirAjustes = ver => { $('ajustes').classList.toggle('ver', ver); $('fondo').classList.toggle('ver', ver); };
+$('btnAjustes').onclick = () => abrirAjustes(true);
+$('btnAjustesListo').onclick = $('fondo').onclick = () => abrirAjustes(false);
+
+// pantalla del documento: «Listo» deja de grabar y arma las diapositivas limpias
+async function abrirDocumento() {
+  const n = await contar();
+  if (!n) { info('Todavía no hay fotos.'); return; }
+  if (activo) detener();
+  $('documento').hidden = false;
+  if (preparando || (revision && revision.fotos === n)) return;   // ya está listo (o en camino)
+  revision = null;
+  $('revGrilla').replaceChildren(); $('filtros').hidden = true; $('btnFiltros').classList.remove('on');
+  $('progreso').hidden = false; $('progreso').querySelector('.rueda').hidden = false;
+  $('revTitulo').textContent = `${n} fotos`; $('guardarTxt').textContent = 'PDF';
+  await exportarPdf();
+}
+function cerrarDocumento() { $('documento').hidden = true; }
+const pintarOcr = () => { $('btnOcr').classList.toggle('on', cfg.ocr); $('ocrTxt').textContent = cfg.ocr ? 'Texto: sí' : 'Texto: no'; };
+$('btnListo').onclick = abrirDocumento;
+$('btnRevVolver').onclick = cerrarDocumento;
+$('btnSeguir').onclick = () => { cerrarDocumento(); iniciar(); };
+$('btnFiltros').onclick = () => { const f = $('filtros'); f.hidden = !f.hidden; $('btnFiltros').classList.toggle('on', !f.hidden); };
+$('btnOcr').onclick = () => {
+  cfg.ocr = !cfg.ocr; guardarCfg(); pintarOcr();
+  info(cfg.ocr ? 'El PDF tendrá el texto reconocido (buscable y copiable). Tarda más.' : 'El PDF saldrá solo con las imágenes.');
+};
+$('btnZip').onclick = exportar;
+$('btnRevGuardar').onclick = guardarPdf;
+$('btnExportar').onclick = () => { abrirAjustes(false); exportar(); };
+$('giro').value = String(cfg.giro);
+$('giro').onchange = e => { cfg.giro = e.target.value === 'auto' ? 'auto' : +e.target.value; guardarCfg(); };
+$('voltear').checked = cfg.voltear; $('btnGirar').classList.toggle('on', cfg.voltear);
+$('voltear').onchange = e => { cfg.voltear = e.target.checked; guardarCfg(); $('btnGirar').classList.toggle('on', cfg.voltear); };
+$('btnBorrar').onclick = async () => {
+  if (!confirm('¿Borrar todas las fotos guardadas en este celular? Exporta primero si no lo has hecho.')) return;
+  await vaciar(); total = 0; revision = null; $('contador').textContent = 0; $('miniatura').classList.remove('hay');
+  abrirAjustes(false);
+  info('Fotos borradas.');
+};
+$('btnQuitarMarco').onclick = () => { cfg.quad = null; finMarcado(); abrirAjustes(false); };
+pintarModos(); pintarOcr();
 
 // controles de configuración: [id, clave en cfg, cómo mostrar el valor]
 const controles = [
   ['sens', 'sens', v => v],
   ['confirmar', 'confirmar', v => v],
   ['pausa', 'pausa', v => +v ? v + ' s' : 'ninguna'],
-  ['red', 'red', v => +v ? v + ' s' : '— (apagada; ya no suele hacer falta)'],
+  ['red', 'red', v => +v ? v + ' s' : 'apagada'],
 ];
 for (const [id, clave, txt] of controles) {
   $(id).value = cfg[clave]; $(id + 'Txt').textContent = txt(cfg[clave]);
@@ -1214,9 +1506,12 @@ for (const [id, clave, txt] of controles) {
 $('recortar').checked = cfg.recortar;
 $('recortar').onchange = e => { cfg.recortar = e.target.checked; guardarCfg(); };
 
-contar().then(n => {
+contar().then(async n => {
   total = n; $('contador').textContent = n;
-  if (n) info(`Hay ${n} fotos guardadas de una sesión anterior. Expórtalas o bórralas antes de empezar otra clase.`);
+  if (!n) return;
+  info(`Hay ${n} fotos guardadas de una sesión anterior.\nToca «Listo» para exportarlas, o bórralas en Configuración.`);
+  const ks = await claves(), reg = await leer(ks[ks.length - 1]);
+  ultima.src = URL.createObjectURL(reg.blob); $('miniatura').classList.add('hay');
 }).catch(e => info('No se pudo abrir el almacenamiento: ' + e.message));
 </script>
 </body>
